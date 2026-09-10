@@ -1,0 +1,5 @@
+sentence-transformers
+umap-learn
+hdbscan
+plotly
+numpy

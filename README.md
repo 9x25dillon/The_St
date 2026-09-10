@@ -1,4 +1,4 @@
-# The Algorithmic Mirror
+#The_St (an Algorithmic Mirror)
 
 Module one of a local-first system for seeing and steering your own digital footprint.
 This module does one thing: take your browser exhaust, embed it, cluster it, and show you

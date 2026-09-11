@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-The Algorithmic Mirror -- TikTok source adapter.
+The Saint -- TikTok source adapter.
 
 Meets a TikTok data export (Settings and privacy > Account > Download your data > JSON).
 The export's schema drifts across app versions and splits across files, so this does NOT
@@ -17,9 +17,8 @@ Three kinds of data come out, and they are NOT equivalent:
   3. ASSIGNED labels -- TikTok's own inferred ad-interest categories for you. Not their
                         weights; their OUTPUT -- who they decided you are.
 
-The examination: cluster (1), then drop (3) into the same space. Categories that land far
-from anything you actually searched are the algorithm's reach beyond your stated intent --
-the divergence browser history could never surface.
+The examination: cluster (1), then drop (3) into the same space. The 2D placement is exploratory: projection distance does not establish that a
+platform inference is wrong, and an export may omit relevant activity.
 
 Run:
     python tiktok.py /path/to/unzipped_export
@@ -52,12 +51,15 @@ class TikTokExport:
 
 
 def _parse_date(v: str):
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S%z"):
-        try:
-            return datetime.strptime(v.strip(), fmt).replace(tzinfo=timezone.utc).timestamp()
-        except (ValueError, AttributeError):
-            continue
-    return None
+    if not isinstance(v, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _iter_dicts(node):
@@ -71,19 +73,27 @@ def _iter_dicts(node):
 
 
 def _load_json(path: str) -> list:
-    files = [path] if os.path.isfile(path) else glob.glob(
-        os.path.join(path, "**", "*.json"), recursive=True)
+    if not os.path.exists(path):
+        raise ValueError(f"Export path does not exist: {path}")
+    files = [path] if os.path.isfile(path) else sorted(glob.glob(
+        os.path.join(path, "**", "*.json"), recursive=True))
+    if not files:
+        raise ValueError(f"No JSON files found in: {path}")
     blobs = []
     for f in files:
         try:
-            with open(f, encoding="utf-8") as fh:
+            with open(f, encoding="utf-8-sig") as fh:
                 blobs.append(json.load(fh))
-        except (json.JSONDecodeError, OSError):
-            continue
+        except (ValueError, OSError) as exc:
+            raise ValueError(f"Cannot read JSON export {f}: {exc}") from exc
     return blobs
 
 
 def load(path: str) -> TikTokExport:
+    return load_blobs(_load_json(path))
+
+
+def load_blobs(blobs: list) -> TikTokExport:
     out = TikTokExport()
     seen: set[str] = set()
 
@@ -93,12 +103,14 @@ def load(path: str) -> TikTokExport:
             seen.add(t.lower())
             out.expressed.append(Record(text=t, source=source, detail="tiktok"))
 
-    for blob in _load_json(path):
+    for blob in blobs:
         for node in _iter_dicts(blob):
             node_date = None
             for k, v in node.items():
                 if isinstance(v, str) and _DATE_KEY.search(k):
-                    node_date = _parse_date(v) or node_date
+                    parsed = _parse_date(v)
+                    if parsed is not None:
+                        node_date = parsed
             for k, v in node.items():
                 if isinstance(v, str):
                     if _SEARCH.search(k):
@@ -162,16 +174,22 @@ def divergence_html(exp: TikTokExport, out: str = "tiktok_mirror.html"):
         xaxis=dict(visible=False), yaxis=dict(visible=False))
     fig.write_html(out, include_plotlyjs=True)
     print(f"wrote {out}: {len(texts)} expressed signals, {len(exp.ad_categories)} assigned categories")
-    print("stars far from any dot cluster are the algorithm's reach past what you actually sought")
+    print("2D placement is exploratory; distance alone does not establish an incorrect inference")
 
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="The Algorithmic Mirror -- TikTok adapter")
+    ap = argparse.ArgumentParser(description="The Saint -- TikTok adapter")
     ap.add_argument("export", help="unzipped TikTok export folder, or a single user_data.json")
     ap.add_argument("--out", default="tiktok_mirror.html")
+    ap.add_argument("--inspect", action="store_true",
+                    help="report parsed counts without downloading a model or rendering")
     args = ap.parse_args()
-    exp = load(args.export)
+    try:
+        exp = load(args.export)
+    except ValueError as exc:
+        ap.error(str(exc))
     print(f"expressed {len(exp.expressed)}, watched {len(exp.watch_times)}, "
           f"categories {len(exp.ad_categories)}")
-    divergence_html(exp, args.out)
+    if not args.inspect:
+        divergence_html(exp, args.out)

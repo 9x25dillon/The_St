@@ -1,3 +1,14 @@
+## Implementation update
+
+The repo now includes `notes.py` for personal Markdown/plain-text journals,
+`app.py` plus `web/` for the loopback-only in-memory interface, and `run.py`
+for one-command startup. `setup_local.py` installs optional CPU-based semantic
+analysis. See README.md for current run instructions and privacy boundaries.
+Browser imports now use SQLite backup, and parser/HTTP/browser smoke tests live
+in `tests/`. The historical session notes below describe the original prototype;
+their immediate actions and earlier distance-based interpretation are superseded
+by the README and current implementation.
+
 # The Saint (The_St) — Session Hand-off
 
 ## What this is

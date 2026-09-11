@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-The Algorithmic Mirror -- module one: the self-mirror.
+The Saint -- module one: the self-mirror.
 
 Hypothesis under test:
     My own browser exhaust, embedded and clustered, resolves into
@@ -26,14 +26,16 @@ from __future__ import annotations
 import argparse
 import glob
 import os
-import shutil
 import sqlite3
 import sys
 import tempfile
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, parse_qs
 
-import numpy as np
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 @dataclass
@@ -47,6 +49,8 @@ class Record:
 
 FIREFOX_GLOBS = [
     "~/.mozilla/firefox/*/places.sqlite",
+    "~/snap/firefox/common/.mozilla/firefox/*/places.sqlite",
+    "~/.var/app/org.mozilla.firefox/.mozilla/firefox/*/places.sqlite",
     "~/Library/Application Support/Firefox/Profiles/*/places.sqlite",
     "~/AppData/Roaming/Mozilla/Firefox/Profiles/*/places.sqlite",
 ]
@@ -54,6 +58,8 @@ FIREFOX_GLOBS = [
 CHROME_GLOBS = [
     "~/.config/google-chrome/Default/History",
     "~/.config/chromium/Default/History",
+    "~/.config/google-chrome/Profile */History",
+    "~/.config/chromium/Profile */History",
     "~/Library/Application Support/Google/Chrome/Default/History",
     "~/AppData/Local/Google/Chrome/User Data/Default/History",
 ]
@@ -61,18 +67,31 @@ CHROME_GLOBS = [
 
 def _first_existing(globs: list[str]) -> str | None:
     for g in globs:
-        hits = glob.glob(os.path.expanduser(g))
+        hits = sorted(glob.glob(os.path.expanduser(g)))
         if hits:
             return hits[0]
     return None
 
 
-def _copy_unlocked(db_path: str) -> str:
-    # history DBs are locked while the browser runs; work on a copy.
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-    tmp.close()
-    shutil.copy2(db_path, tmp.name)
-    return tmp.name
+def _read_history(db_path: str, table: str) -> list[Record]:
+    # SQLite backup includes committed WAL data and never modifies the source.
+    from pathlib import Path
+    with tempfile.TemporaryDirectory(prefix="saint-history-") as folder:
+        source = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True,
+                                 timeout=2)
+        target = sqlite3.connect(os.path.join(folder, "history.sqlite"))
+        try:
+            import time
+            deadline = time.monotonic() + 5
+            def progress(status, remaining, total):
+                if time.monotonic() > deadline:
+                    raise ValueError("Browser history is busy. Close the browser and retry.")
+            source.backup(target, pages=256, progress=progress)
+            rows = target.execute(f"SELECT url, title FROM {table}").fetchall()
+        finally:
+            target.close()
+            source.close()
+    return _rows_to_records(rows)
 
 
 def _extract_query(url: str) -> str | None:
@@ -106,29 +125,15 @@ def _rows_to_records(rows) -> list[Record]:
 def read_firefox() -> list[Record]:
     db = _first_existing(FIREFOX_GLOBS)
     if not db:
-        sys.exit("No Firefox places.sqlite found. Try --browser chrome, or edit FIREFOX_GLOBS.")
-    copy = _copy_unlocked(db)
-    con = sqlite3.connect(copy)
-    rows = con.execute(
-        "SELECT url, title FROM moz_places WHERE title IS NOT NULL AND title != ''"
-    ).fetchall()
-    con.close()
-    os.unlink(copy)
-    return _rows_to_records(rows)
+        raise ValueError("No Firefox places.sqlite found. Try --browser chrome, or edit FIREFOX_GLOBS.")
+    return _read_history(db, "moz_places")
 
 
 def read_chrome() -> list[Record]:
     db = _first_existing(CHROME_GLOBS)
     if not db:
-        sys.exit("No Chrome History DB found. Try --browser firefox, or edit CHROME_GLOBS.")
-    copy = _copy_unlocked(db)
-    con = sqlite3.connect(copy)
-    rows = con.execute(
-        "SELECT url, title FROM urls WHERE title IS NOT NULL AND title != ''"
-    ).fetchall()
-    con.close()
-    os.unlink(copy)
-    return _rows_to_records(rows)
+        raise ValueError("No Chrome History DB found. Try --browser firefox, or edit CHROME_GLOBS.")
+    return _read_history(db, "urls")
 
 
 def read_demo(n: int = 600):
@@ -138,6 +143,7 @@ def read_demo(n: int = 600):
     Five planted themes plus uniform-noise curiosity-clicks. If these five
     separate cleanly in mirror.html, the machinery is sound.
     """
+    import numpy as np
     rng = np.random.default_rng(7)
     themes = ["rust async runtimes", "terahertz biophysics", "modular synth patching",
               "osage headright law", "late-night doomscroll"]
@@ -157,9 +163,9 @@ def read_demo(n: int = 600):
 
 # ------------------------------- embedding --------------------------------
 
-def embed(texts: list[str]) -> np.ndarray:
+def embed(texts: list[str], *, offline: bool = False) -> np.ndarray:
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=offline)
     return model.encode(texts, show_progress_bar=True, normalize_embeddings=True)
 
 
@@ -180,6 +186,7 @@ def cluster(vectors: np.ndarray):
 
 
 def render(recs, labels, outlier, xy, out="mirror.html"):
+    import numpy as np
     import plotly.graph_objects as go
     labels = np.asarray(labels)
     fig = go.Figure()
@@ -194,7 +201,7 @@ def render(recs, labels, outlier, xy, out="mirror.html"):
             marker=dict(size=6, opacity=0.30 if lab == -1 else 0.85),
         ))
     fig.update_layout(
-        title="The Algorithmic Mirror -- your exhaust, clustered",
+        title="The Saint -- your exhaust, clustered",
         template="plotly_dark", showlegend=True,
         xaxis=dict(visible=False), yaxis=dict(visible=False),
     )
@@ -210,7 +217,7 @@ def render(recs, labels, outlier, xy, out="mirror.html"):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="The Algorithmic Mirror -- module one")
+    ap = argparse.ArgumentParser(description="The Saint -- module one")
     ap.add_argument("--browser", choices=["firefox", "chrome"], help="which history to read")
     ap.add_argument("--demo", action="store_true", help="synthetic data, proves the machinery")
     ap.add_argument("--out", default="mirror.html")
@@ -220,19 +227,23 @@ def main():
         recs, vectors = read_demo()
     elif args.browser == "firefox":
         recs = read_firefox()
-        vectors = embed([r.text for r in recs])
     elif args.browser == "chrome":
         recs = read_chrome()
-        vectors = embed([r.text for r in recs])
     else:
         ap.error("pass --demo, or --browser with firefox or chrome")
 
     if len(recs) < 30:
         sys.exit(f"only {len(recs)} usable records -- too few to cluster meaningfully")
 
+    if not args.demo:
+        vectors = embed([r.text for r in recs])
+
     labels, outlier, xy = cluster(vectors)
     render(recs, labels, outlier, xy, args.out)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, OSError, sqlite3.Error, ImportError) as exc:
+        sys.exit(f"{exc}\nFor semantic analysis, run python setup_local.py first.")

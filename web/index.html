@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>The Saint · A little closer to yourself</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><a class="brand" href="/">✳ <span>THE SAINT</span></a><span class="local">● On your machine</span><button id="clear" class="quiet">Clear session</button></header>
+<main>
+<section class="intro"><p class="eyebrow">YOUR WORDS. YOUR WORLD.</p><h1>A little closer<br>to yourself.</h1><p>Your journal, your small obsessions, your everyday thoughts.<br>Find the threads in what you choose to share with yourself.</p></section>
+<div class="workspace">
+<aside><h2>Start with something yours</h2><p class="muted">Choose a source. Each import replaces the current view.</p>
+<label for="source">Source</label><select id="source"><option value="notes">Personal notes & journal</option><option value="tiktok">TikTok JSON export</option><option value="firefox">Firefox history</option><option value="chrome">Chrome history</option></select>
+<div id="file-area"><label id="file-label" for="files">Markdown or plain-text files</label><input id="files" type="file" accept=".md,.markdown,.txt" multiple><p class="muted small">Select up to 500 files. 1 MB per note, 8 MB per import.</p></div>
+<p id="browser-help" hidden>Reads the first detected local browser profile when you click Import.</p>
+<button id="import" class="primary">Import selected source <span>↗</span></button><button id="demo" class="secondary">Try a sample journal</button>
+<div class="privacy"><strong>A private moment.</strong><p>Files are read locally and held in memory. Nothing is uploaded to an external service. Clear the session or stop the app when you’re done.</p></div>
+</aside>
+<section class="results" aria-label="Your imported data"><div class="section-top"><div><p class="eyebrow">THE REFLECTION</p><h2 id="result-title">Room for your thoughts</h2></div><span id="count" class="badge">0 passages</span></div>
+<p id="status" role="status" aria-live="polite">Choose a few notes, or explore the sample journal.</p>
+<div id="empty"><div class="orb">✳</div><h3>It starts with your own words.</h3><p>No account. No feed. Just a space to notice what keeps coming back.</p></div>
+<div id="content" hidden><div class="metrics"><div><strong id="file-count">0</strong><span>source references</span></div><div><strong id="category-count">0</strong><span>assigned labels</span></div><div><strong id="watch-count">0</strong><span>watch timestamps</span></div></div>
+<h3>Words that keep returning</h3><p class="muted small">Word counts across your passages, before semantic analysis.</p><div id="terms" class="chips"></div>
+<div class="map-heading"><h3>Behavioral islands</h3><button id="analyze" class="secondary">Build semantic map</button></div><p id="model-help" class="muted small"></p><div id="map-wrap" hidden><canvas id="map" width="900" height="380" tabindex="0" aria-label="Semantic scatter plot; all passage text is also available in the list below"></canvas><p id="point-detail" class="muted">Hover or click a point to read its passage. Gold stars are assigned labels.</p><p class="muted small">The 2D map is exploratory. Plot distance alone cannot establish an incorrect platform inference.</p></div>
+<div class="map-heading"><h3>Your passages</h3><input id="search" type="search" placeholder="Find a word or thought…" aria-label="Search passages"></div><div id="records"></div><button id="more" class="quiet" hidden>Show more passages</button><div id="categories"></div>
+</div></section></div>
+<footer>THE SAINT <span>Understanding first.</span></footer>
+</main></body></html>

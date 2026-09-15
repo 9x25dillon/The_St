@@ -23,4 +23,10 @@ assert len(result['points']) == 60
 assert len(result['stars']) == 2
 assert all(np.isfinite(p['x']) and np.isfinite(p['y']) for p in result['points'])
 assert all(-1.001 <= p['similarity'] <= 1.001 for p in result['stars'])
-print('Semantic smoke passed: synthetic clusters, embedded HTML, offline notes and assigned labels.')
+assert all(np.isfinite(p['iws']) and 0 <= p['iws'] <= 1.001 for p in result['points'])
+assert all(isinstance(p['signal'], bool) for p in result['points'])
+health = result['health']
+assert 0 <= health['snr'] <= 1.001
+assert 0 <= health['homogenization'] <= 1.001
+assert 0 <= health['profile_health'] <= 1.001
+print('Semantic smoke passed: synthetic clusters, embedded HTML, offline notes and assigned labels, profile health.')

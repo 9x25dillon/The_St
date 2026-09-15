@@ -7,7 +7,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from app import Server, import_data
+from app import Server, detect_source, import_data
 from mirror import _read_history
 
 
@@ -20,6 +20,48 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(result['categories'], ['Gardening'])
         with self.assertRaises(ValueError):
             import_data({'source':'notes','files':[]})
+
+    def test_new_sources_are_wired_correctly(self):
+        result = import_data({'source':'youtube','files':[{'text':json.dumps(
+            [{'title':'Searched for gardens','time':'2024-01-01T00:00:00Z'}])}]})
+        self.assertEqual(result['records'][0]['source'], 'search')
+
+        result = import_data({'source':'instagram','files':[{'text':json.dumps(
+            {'topics_your_topics':[{'string_map_data':{'Name':{'value':'Cooking'}}}]})}]})
+        self.assertEqual(result['categories'], ['Cooking'])
+
+        result = import_data({'source':'spotify','files':[{'text':json.dumps(
+            [{'ts':'2024-01-01T00:00:00Z','master_metadata_track_name':'A Song',
+              'master_metadata_album_artist_name':'A Band'}])}]})
+        self.assertEqual(result['records'][0]['text'], 'A Song — A Band')
+
+        result = import_data({'source':'reddit','files':[{'name':'posts.csv','text':
+            'id,permalink,date,ip,subreddit,gildings,title,url,body\n'
+            '1,/r/x/1,2024-01-01 00:00:00 UTC,0.0.0.0,gardening,0,Tomato tips,,Water deeply\n'}]})
+        self.assertEqual(result['records'][0]['source'], 'post')
+
+        result = import_data({'source':'amazon','files':[{'name':'Retail.OrderHistory.1.csv','text':
+            'Order Date,Product Name\n2024-01-01 00:00:00 UTC,A Nice Lamp\n'}]})
+        self.assertEqual(result['records'][0]['text'], 'A Nice Lamp')
+
+        result = import_data({'source':'usage','files':[{'text':json.dumps(
+            [{'app':'Instagram','minutes':10,'date':'2024-01-01'}])}]})
+        self.assertEqual(result['records'][0]['text'], 'Instagram: 10 minutes')
+
+        result = import_data({'source':'x','files':[{'name':'search-history.js','text':
+            'window.YTD.search_history.part0 = ' + json.dumps(
+                [{'searchHistory':{'query':'gardening tips'}}]) + ';'}]})
+        self.assertEqual(result['records'][0]['text'], 'gardening tips')
+
+    def test_auto_detect_resolves_each_new_source_filename(self):
+        cases = {
+            'youtube': 'watch-history.json', 'instagram': 'your_topics.json',
+            'spotify': 'Streaming_History_Audio_2024_1.json', 'reddit': 'posts.csv',
+            'amazon': 'Retail.OrderHistory.1.csv', 'usage': 'usage.json',
+            'tiktok': 'user_data.json', 'x': 'search-history.js',
+        }
+        for expected, name in cases.items():
+            self.assertEqual(detect_source([{'name': name}]), expected, name)
 
     def test_sqlite_backup_reads_wal_and_empty_title_query(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -57,6 +99,42 @@ class HTTPTests(unittest.TestCase):
         raw = response.read()
         connection.close()
         return response.status, raw
+
+    def test_sequential_imports_combine_into_one_session(self):
+        self.request('POST', '/api/import', {'source': 'demo'})
+        self.request('POST', '/api/import',
+                     {'source': 'notes', 'files': [{'name': 'diary.md', 'text': 'Gardens and walks.'}]})
+        state = json.loads(self.request('GET', '/api/state')[1])
+        self.assertEqual(len(state['records']), 61)
+        self.assertEqual({s['source']: s['count'] for s in state['sources']},
+                         {'demo': 60, 'notes': 1})
+
+    def test_failed_append_preserves_combined_session(self):
+        self.request('POST', '/api/import', {'source': 'demo'})
+        self.request('POST', '/api/import',
+                     {'source': 'notes', 'files': [{'name': 'diary.md', 'text': 'Gardens and walks.'}]})
+        status, _ = self.request('POST', '/api/import', {'source': 'notes', 'files': []})
+        self.assertEqual(status, 400)
+        state = json.loads(self.request('GET', '/api/state')[1])
+        self.assertEqual(len(state['records']), 61)
+
+    def test_auto_detect_routes_by_filename(self):
+        status, body = self.request('POST', '/api/import',
+            {'source': 'auto', 'files': [{'name': 'diary.md', 'text': 'Gardens and walks.'}]})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['detected_source'], 'notes')
+
+    def test_auto_detect_ambiguous_files_rejected(self):
+        status, body = self.request('POST', '/api/import',
+            {'source': 'auto', 'files': [{'name': 'diary.md', 'text': 'x'}, {'name': 'posts.csv', 'text': 'x'}]})
+        self.assertEqual(status, 400)
+        self.assertIn('different sources', json.loads(body)['error'])
+
+    def test_auto_detect_unrecognized_filename_rejected(self):
+        status, body = self.request('POST', '/api/import',
+            {'source': 'auto', 'files': [{'name': 'data.bin', 'text': 'x'}]})
+        self.assertEqual(status, 400)
+        self.assertIn('Choose one manually', json.loads(body)['error'])
 
     def test_import_clear_and_static_assets(self):
         for path in ('/', '/app.js', '/style.css'):

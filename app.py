@@ -17,17 +17,81 @@ import threading
 from mirror import Record, read_chrome, read_firefox
 from notes import parse_note, MAX_RECORDS
 from tiktok import load_blobs
+from youtube import load_blobs as load_youtube_blobs
+from instagram import load_blobs as load_instagram_blobs
+from spotify import load_blobs as load_spotify_blobs
+from reddit import load_rows as load_reddit_rows
+from amazon import load_rows as load_amazon_rows
+from usage import load_blobs as load_usage_blobs
+from x import load_files as load_x_files
 
 ASSETS = Path(__file__).parent / 'web'
 MAX_REQUEST = 8_000_000
 STOP = set('the and that this with from have was were are for but not you your my our had has will into just about they them then when what some more been very can'.split())
 
+# Auto-detect: filename patterns for the standard export tools ship, checked in order.
+# A file that matches none of these needs a manual pick from the dropdown -- auto-detect
+# never guesses from content alone, only from names these tools consistently use.
+_SOURCE_FILENAME_PATTERNS = [
+    (re.compile(r'\.(md|markdown|txt)$', re.I), 'notes'),
+    (re.compile(r'(watch-history|search-history)\.json$', re.I), 'youtube'),
+    (re.compile(r'your_topics|word_or_phrase_searches|ads_viewed|ads_and_topics', re.I), 'instagram'),
+    (re.compile(r'streaming_history_audio|streaminghistory', re.I), 'spotify'),
+    (re.compile(r'posts\.csv$|comments\.csv$', re.I), 'reddit'),
+    (re.compile(r'retail\.orderhistory', re.I), 'amazon'),
+    (re.compile(r'usage|screen.?time', re.I), 'usage'),
+    (re.compile(r'user_data\.json$|tiktok', re.I), 'tiktok'),
+    (re.compile(r'\.js$', re.I), 'x'),
+]
+
+
+def detect_source(files):
+    if not isinstance(files, list) or not files:
+        raise ValueError('Choose one or more files to auto-detect a source.')
+    guesses = set()
+    for file in files:
+        name = file.get('name', '') if isinstance(file, dict) else ''
+        for pattern, source in _SOURCE_FILENAME_PATTERNS:
+            if pattern.search(name):
+                guesses.add(source)
+                break
+    if len(guesses) == 1:
+        return guesses.pop()
+    if not guesses:
+        raise ValueError('Could not detect a source from these filenames. '
+                         'Choose one manually from the dropdown.')
+    raise ValueError(f"These files look like different sources ({', '.join(sorted(guesses))}). "
+                     'Import one source at a time.')
+
+
+def word_terms(record_dicts):
+    words = Counter(word for r in record_dicts for word in re.findall(r"[^\W\d_]{3,}", r['text'].lower())
+                    if word not in STOP)
+    return words.most_common(16)
+
 
 def summarize(records, categories=(), watches=0):
-    words = Counter(word for r in records for word in re.findall(r"[^\W\d_]{3,}", r.text.lower())
-                    if word not in STOP)
-    return {'records': [asdict(r) for r in records], 'categories': list(categories),
-            'watches': watches, 'terms': words.most_common(16), 'map': None}
+    record_dicts = [asdict(r) for r in records]
+    return {'records': record_dicts, 'categories': list(categories), 'watches': watches,
+            'terms': word_terms(record_dicts), 'map': None, 'sources': []}
+
+
+def merge_snapshot(existing, incoming, source_name):
+    records = existing['records'] + incoming['records']
+    if len(records) > MAX_RECORDS:
+        raise ValueError('Combined session exceeds 5,000 passages. Clear the session or import fewer files.')
+    sources = [dict(entry) for entry in existing.get('sources', [])]
+    added = len(incoming['records'])
+    for entry in sources:
+        if entry['source'] == source_name:
+            entry['count'] += added
+            break
+    else:
+        sources.append({'source': source_name, 'count': added})
+    return {'records': records,
+            'categories': existing['categories'] + incoming['categories'],
+            'watches': existing['watches'] + incoming['watches'],
+            'terms': word_terms(records), 'map': None, 'sources': sources}
 
 
 def import_data(data):
@@ -54,6 +118,57 @@ def import_data(data):
             raise ValueError('Each TikTok file must contain valid JSON.') from exc
         export = load_blobs(blobs)
         records, categories, watches = export.expressed, export.ad_categories, len(export.watch_times)
+    elif source == 'youtube':
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > 500:
+            raise ValueError('Choose YouTube Takeout JSON export files.')
+        try:
+            blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise ValueError('Each YouTube file must contain valid JSON.') from exc
+        records, categories, watches = load_youtube_blobs(blobs), [], 0
+    elif source == 'instagram':
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > 500:
+            raise ValueError('Choose Instagram JSON export files.')
+        try:
+            blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise ValueError('Each Instagram file must contain valid JSON.') from exc
+        records, categories, watches = (*load_instagram_blobs(blobs), 0)
+    elif source == 'spotify':
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > 500:
+            raise ValueError('Choose Spotify streaming history JSON files.')
+        try:
+            blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise ValueError('Each Spotify file must contain valid JSON.') from exc
+        records, categories, watches = load_spotify_blobs(blobs), [], 0
+    elif source == 'reddit':
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > 500:
+            raise ValueError('Choose Reddit posts.csv / comments.csv export files.')
+        records, categories, watches = load_reddit_rows(files), [], 0
+    elif source == 'amazon':
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > 500:
+            raise ValueError('Choose an Amazon order history CSV file.')
+        records, categories, watches = load_amazon_rows(files), [], 0
+    elif source == 'usage':
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > 500:
+            raise ValueError('Choose a usage.json screen-time export file.')
+        try:
+            blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise ValueError('Each usage file must contain valid JSON.') from exc
+        records, categories, watches = load_usage_blobs(blobs), [], 0
+    elif source == 'x':
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > 500:
+            raise ValueError('Choose X/Twitter export .js files.')
+        records, categories, watches = (*load_x_files(files), 0)
     elif source in ('firefox', 'chrome'):
         records = (read_firefox if source == 'firefox' else read_chrome)()
     elif source == 'demo':
@@ -78,11 +193,28 @@ def semantic_map(snapshot):
     import umap
     import hdbscan
     from mirror import embed
+    import signal_score as sig
     texts = [r['text'] for r in snapshot['records']]
+    timestamps = [r.get('when') for r in snapshot['records']]
     vectors = embed(texts, offline=True)
     mid = umap.UMAP(n_components=15, metric='cosine', random_state=7).fit_transform(vectors)
     estimator = hdbscan.HDBSCAN(min_cluster_size=10, min_samples=3).fit(mid)
     reducer = umap.UMAP(n_components=2, metric='cosine', random_state=7).fit(vectors)
+
+    # Local "profile health" scoring -- same mid-dimensional vectors used for clustering,
+    # never the 2D display projection. See signal_score.py for what each term means and
+    # what's deliberately not implemented yet.
+    labels = estimator.labels_
+    anchor = sig.anchor_strength(mid, labels)
+    divergence = sig.divergence_penalty(mid, labels)
+    recency = sig.recency_decay(timestamps)
+    noise = sig.noise_exposure(estimator.outlier_scores_, labels)
+    iws = sig.injection_weight(anchor, divergence, recency, noise)
+    snr = sig.signal_to_noise(iws)
+    homogenization = sig.homogenization_index(labels)
+    health = {'snr': snr, 'homogenization': homogenization,
+              'profile_health': sig.profile_health(snr, homogenization)}
+
     stars = []
     if snapshot['categories']:
         cv = embed(snapshot['categories'], offline=True)
@@ -92,10 +224,11 @@ def semantic_map(snapshot):
         stars = [{'text': text, 'x': float(pos[0]), 'y': float(pos[1]),
                   'nearest': texts[int(index)], 'similarity': float(cv[i] @ vectors[index])}
                  for i, (text, pos, index) in enumerate(zip(snapshot['categories'], positions, nearest))]
-    return {'points': [{'x': float(pos[0]), 'y': float(pos[1]), 'label': int(label),
-                        'outlier': float(score) if np.isfinite(score) else None}
-                       for pos, label, score in zip(reducer.embedding_, estimator.labels_, estimator.outlier_scores_)],
-            'stars': stars}
+    points = [{'x': float(pos[0]), 'y': float(pos[1]), 'label': int(label),
+               'outlier': float(score) if np.isfinite(score) else None,
+               'iws': float(w), 'signal': bool(w >= 0.35)}
+              for pos, label, score, w in zip(reducer.embedding_, labels, estimator.outlier_scores_, iws)]
+    return {'points': points, 'stars': stars, 'health': health}
 
 
 class Server(ThreadingHTTPServer):
@@ -194,12 +327,15 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError('Expected a JSON object.')
             if self.path == '/api/import':
-                snapshot = import_data(data)
+                source = data.get('source')
+                resolved = detect_source(data.get('files')) if source == 'auto' else source
+                incoming = import_data({**data, 'source': resolved})
                 with self.server.lock:
+                    merged = merge_snapshot(self.server.snapshot, incoming, resolved)
                     self.server.generation += 1
-                    self.server.snapshot = snapshot
+                    self.server.snapshot = merged
                     self.server.job = {'status': 'idle'}
-                self.reply(200, {'ok': True})
+                self.reply(200, {'ok': True, 'detected_source': resolved})
             elif self.path == '/api/clear':
                 with self.server.lock:
                     self.server.generation += 1

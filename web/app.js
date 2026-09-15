@@ -1,6 +1,24 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let state, token, limit = 40, poll, hits = [], busy = false;
+let state, token, limit = 40, poll, hits = [], busy = false, autoAnalyzing = false;
+// File-based sources: accept pattern + file-input label. Missing entries (firefox,
+// chrome) read a local browser profile server-side instead of taking an upload.
+const SOURCES = {
+  auto: {label: 'Any export file — source detected automatically', accept: '.md,.markdown,.txt,.json,.js,.csv'},
+  notes: {label: 'Markdown or plain-text files', accept: '.md,.markdown,.txt'},
+  tiktok: {label: 'TikTok JSON export files', accept: '.json'},
+  youtube: {label: 'YouTube Takeout JSON files (watch-history.json, search-history.json)', accept: '.json'},
+  instagram: {label: 'Instagram "Download your information" JSON files', accept: '.json'},
+  x: {label: 'X/Twitter export .js files (e.g. search-history.js)', accept: '.js'},
+  spotify: {label: 'Spotify extended streaming history JSON files', accept: '.json'},
+  reddit: {label: 'Reddit posts.csv / comments.csv files', accept: '.csv'},
+  amazon: {label: 'Amazon order history CSV (Retail.OrderHistory.*.csv)', accept: '.csv'},
+  usage: {label: 'A usage.json screen-time file ({app, minutes, date} rows)', accept: '.json'},
+};
+const SOURCE_NAMES = {notes: 'personal notes', tiktok: 'TikTok export', youtube: 'YouTube history',
+  instagram: 'Instagram export', x: 'X/Twitter export', spotify: 'Spotify history',
+  reddit: 'Reddit export', amazon: 'Amazon order history', usage: 'device screen time',
+  firefox: 'Firefox history', chrome: 'Chrome history', demo: 'sample journal'};
 function status(message, error = false) { $('status').textContent = message; $('status').classList.toggle('error', error); }
 async function api(path, data) {
   if (window.SaintAndroid) {
@@ -20,7 +38,7 @@ function passages() {
   $('records').replaceChildren(...selected.slice(0,limit).map(r => {
     const card = node('article','','passage');
     const point = state.map?.points[r.index];
-    const island = point ? ` · ${point.label < 0 ? 'noise' : `island ${point.label}`} · outlier score ${point.outlier?.toFixed(2) ?? 'unavailable'}` : '';
+    const island = point ? ` · ${point.label < 0 ? 'noise' : `island ${point.label}`} · outlier score ${point.outlier?.toFixed(2) ?? 'unavailable'} · ${point.signal ? 'signal' : 'flagged as noise'}` : '';
     card.append(node('small', `${r.detail} · ${r.source}${island}`),node('p',r.text)); return card;
   }));
   if(!selected.length) $('records').append(node('p','No matching passages.','muted'));
@@ -50,9 +68,18 @@ function render() {
   $('file-count').textContent=new Set(state.records.map(r=>r.detail)).size;
   $('category-count').textContent=state.categories.length; $('watch-count').textContent=state.watches;
   $('terms').replaceChildren(...state.terms.map(([word,count])=>node('span',`${word} · ${count}`,'chip')));
+  $('sources-row').hidden=!state.sources?.length;
+  $('sources-row').replaceChildren(...(state.sources||[]).map(s=>node('span',`${SOURCE_NAMES[s.source]||s.source} · ${s.count}`,'chip')));
   $('analyze').disabled=busy||state.records.length<30||state.job.status==='running'||!state.semantic_installed;
   $('model-help').textContent=!state.semantic_installed?'Optional setup: run python setup_local.py, then python setup_local.py --download-model. Restart using python run.py.': 'Uses your locally cached model. At least 30 passages required. First analysis can take several minutes.';
   $('map-wrap').hidden=!state.map;
+  const health=state.map?.health;
+  $('health').hidden=!health;
+  if(health){
+    $('health-snr').textContent=`${Math.round(health.snr*100)}%`;
+    $('health-homog').textContent=`${Math.round(health.homogenization*100)}%`;
+    $('health-score').textContent=`${Math.round(health.profile_health*100)}%`;
+  }
   $('categories').replaceChildren();
   if(state.categories.length) $('categories').append(node('h3','Platform-assigned labels'),node('p',state.categories.join(' · ')));
   if (state.platform === 'android') {
@@ -60,6 +87,26 @@ function render() {
     $('model-help').textContent = 'Semantic maps are available in the desktop app. Here you can explore your passages and recurring words offline.';
   }
   passages(); draw();
+  maybeAutoAnalyze();
+}
+// Auto-run the semantic map once there's enough data and none is pending/failed yet.
+// state.map is already null right after any import and only becomes non-null after a
+// successful analyze, so this naturally re-fires after every new import and stays quiet
+// while a job is running or has errored (job.status is then 'running'/'error', not 'idle').
+// Deliberately NOT routed through action()/busy: that mutex disables every button for the
+// duration, which is right for a user-initiated click but wrong for an invisible background
+// trigger -- and a request that loses a race with an in-flight analysis from a prior import
+// (409, "still running") must back off quietly rather than retry in a tight synchronous loop
+// that starves out the Clear button.
+function maybeAutoAnalyze() {
+  if (autoAnalyzing || busy) return;
+  if (!(state.records.length >= 30 && !state.map && state.job.status === 'idle' && state.semantic_installed)) return;
+  autoAnalyzing = true;
+  (async () => {
+    try { await api('/api/analyze', {}); await refresh(); }
+    catch { await new Promise(r => setTimeout(r, 2000)); }
+    finally { autoAnalyzing = false; }
+  })();
 }
 async function refresh() {
   state=await api('/api/state'); token=state.token; render();
@@ -73,17 +120,20 @@ async function action(fn) {
   try { await fn(); } catch(e) {status(e.message,true);} finally {busy=false;['import','demo','clear'].forEach(id=>$(id).disabled=false);if(state)render();}
 }
 $('source').addEventListener('change',()=>{
-  const notes=$('source').value==='notes', files=notes||$('source').value==='tiktok';
-  $('file-area').hidden=!files;$('browser-help').hidden=files;$('files').value='';
-  $('files').accept=notes?'.md,.markdown,.txt':'.json';$('file-label').textContent=notes?'Markdown or plain-text files':'TikTok JSON export files';
+  const cfg=SOURCES[$('source').value];
+  $('file-area').hidden=!cfg;$('browser-help').hidden=!!cfg;$('files').value='';
+  if(cfg){$('files').accept=cfg.accept;$('file-label').textContent=cfg.label;}
 });
 $('import').onclick=()=>action(async()=>{
   const source=$('source').value, chosen=[...$('files').files];
-  if(['notes','tiktok'].includes(source)&&!chosen.length)throw new Error('Choose files to import first.');
+  if(SOURCES[source]&&!chosen.length)throw new Error('Choose files to import first.');
   if(chosen.reduce((n,f)=>n+f.size,0)>7500000)throw new Error('Choose a smaller import (under 8 MB).');
   status('Reading your selected source…');
   const files=await Promise.all(chosen.map(async f=>({name:f.name,text:await f.text()})));
-  await api('/api/import',{source,files});$('point-detail').textContent='Hover or click a point to read its passage.';limit=40;$('search').value='';await refresh();status('Imported locally. Explore your passages below.');
+  const result=await api('/api/import',{source,files});
+  $('point-detail').textContent='Hover or click a point to read its passage.';limit=40;$('search').value='';await refresh();
+  const detected=result.detected_source;
+  status(source==='auto'&&detected?`Detected ${SOURCE_NAMES[detected]||detected}. Added to your session.`:'Added to your session. Explore your passages below.');
 });
 $('demo').onclick=()=>action(async()=>{await api('/api/import',{source:'demo'});limit=40;$('search').value='';await refresh();status('Sample journal loaded. These are synthetic passages.');});
 $('clear').onclick=()=>action(async()=>{await api('/api/clear',{});$('files').value='';$('search').value='';$('point-detail').textContent='Hover or click a point to read its passage.';await refresh();status(window.SaintAndroid ? 'Session cleared.' : 'Session cleared. A running analysis releases its memory when it finishes.');});

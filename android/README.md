@@ -1,7 +1,8 @@
 # The Saint for Android
 
 An offline Android development app for personal Markdown/plain-text notes and
-TikTok JSON exports. It packages the shared web interface inside a native Android
+exports from TikTok, YouTube, Instagram, X/Twitter, Spotify, Reddit, Amazon, and
+device screen time. It packages the shared web interface inside a native Android
 host. The Java adapter parses selected text and holds the session in memory.
 
 ## Build and install
@@ -37,16 +38,24 @@ may use its own network connection to retrieve a file you select.
 ## What works on the phone
 
 - Personal Markdown and text notes, with passage and heading provenance.
-- TikTok expressed text, assigned interest labels, and watch-timestamp counts.
+- TikTok, YouTube, Instagram, X/Twitter, Spotify, Reddit, Amazon, and device
+  screen-time exports — the same adapters as desktop, hand-ported to Java and kept
+  in sync by test coverage on both sides, not shared code.
+- Auto-detect: drop in an export and the app picks the adapter by filename, the
+  same table desktop uses; ambiguous or unrecognized files ask you to pick manually.
+- Imports combine into one session instead of replacing it, with a running list of
+  what's been added and how much.
 - A sample journal, recurring word counts, passage search, and incremental display.
 - Clear session. A failed import preserves the existing session.
 - Responsive layout that respects system bars and the keyboard.
 
-Browser database imports and the Python semantic model remain desktop features.
-They are not silently approximated on Android. The phone app has no background
-collection, analytics, server connection, or persistent personal-data store.
-Sessions can survive opening the file picker, but Android can discard them when
-it terminates the app process. A force-stop always clears the in-memory session.
+Browser database imports (Firefox/Chrome — they read a live local profile, which
+Android's sandboxed picker can't do) and the Python semantic model / Profile Health
+scoring remain desktop features. They are not silently approximated on Android. The
+phone app has no background collection, analytics, server connection, or persistent
+personal-data store. Sessions can survive opening the file picker, but Android can
+discard them when it terminates the app process. A force-stop always clears the
+in-memory session.
 
 ## Development signing
 
@@ -66,9 +75,10 @@ and [AAPT2 command-line packaging](https://developer.android.com/tools/aapt2).
 ## On-device checks
 
 Validated on the connected Pixel 10a: installation and launch, the native bridge,
-sample/search flows, note and TikTok parsing, failed-import recovery, text escaping,
-session clearing, and system-bar spacing. A synthetic text file was also imported
-through the real Android document picker and removed afterward.
+sample/search flows, auto-detect and combined-session imports, note/TikTok/YouTube/
+Instagram/X/Spotify/Reddit/Amazon/usage parsing, failed-import recovery, text
+escaping, session clearing, and system-bar spacing. A synthetic text file was also
+imported through the real Android document picker and removed afterward.
 
 To repeat the automated part, launch the app, obtain its PID with
 `adb shell pidof local.thesaint.app`, forward

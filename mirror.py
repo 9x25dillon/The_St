@@ -43,6 +43,21 @@ class Record:
     text: str        # what gets embedded -- a page title or a search query
     source: str      # "title" or "query"
     detail: str      # url, kept for hover context
+    when: float | None = None  # unix timestamp; None when the source has no reliable date
+
+
+def parse_timestamp(v) -> float | None:
+    """Parse an ISO-8601-ish date string to a unix timestamp, naive dates treated as UTC."""
+    if not isinstance(v, str):
+        return None
+    from datetime import datetime, timezone
+    try:
+        parsed = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 # ------------------------------- ingestion --------------------------------

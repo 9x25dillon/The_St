@@ -30,10 +30,18 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('.passage').length"),40);
   await evaluate("document.getElementById('search').value='piano';document.getElementById('search').dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.querySelectorAll('.passage').length"),12);
+  await evaluate("document.getElementById('clear').click()");
+  await until("document.getElementById('count').textContent === '0 passages'");
+  // Source stays on its default "auto" selection -- this also exercises auto-detect end to
+  // end through a real File object, not just the synthetic {name,text} dicts unit tests use.
   await evaluate(`(async()=>{const input=document.getElementById('files');const transfer=new DataTransfer();transfer.items.add(new File(['# Today\\n\\nA quiet walk. <img src=x onerror=alert(1)>'],'journal.md',{type:'text/plain'}));input.files=transfer.files;document.getElementById('import').click();})()`);
   await until("document.getElementById('count').textContent === '1 passages'");
   assert.equal(await evaluate("document.querySelectorAll('.passage img').length"),0);
   assert.match(await evaluate("document.querySelector('.passage').textContent"),/quiet walk/);
+  assert.match(await evaluate("document.getElementById('status').textContent"),/Detected personal notes/);
+  await evaluate("document.getElementById('demo').click()");
+  await until("document.getElementById('count').textContent === '61 passages'");
+  assert.match(await evaluate("document.getElementById('sources-row').textContent"),/personal notes.*1|sample journal.*60/);
   await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
   await evaluate("document.getElementById('clear').click()");

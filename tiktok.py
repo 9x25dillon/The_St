@@ -31,9 +31,8 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
-from mirror import Record, embed          # reuse module-one primitives
+from mirror import Record, embed, parse_timestamp   # reuse module-one primitives
 
 _URL = re.compile(r"https?://\S*tiktok\.com/\S+", re.I)
 _DATE_KEY = re.compile(r"date|time", re.I)
@@ -50,16 +49,7 @@ class TikTokExport:
     ad_categories: list[str] = field(default_factory=list)  # TikTok's labels for you
 
 
-def _parse_date(v: str):
-    if not isinstance(v, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
+_parse_date = parse_timestamp  # kept as an alias; parsing now lives in mirror.py
 
 
 def _iter_dicts(node):
@@ -97,11 +87,11 @@ def load_blobs(blobs: list) -> TikTokExport:
     out = TikTokExport()
     seen: set[str] = set()
 
-    def add(text: str, source: str):
+    def add(text: str, source: str, when: float | None):
         t = (text or "").strip().lstrip("#")
         if t and t.lower() not in seen:
             seen.add(t.lower())
-            out.expressed.append(Record(text=t, source=source, detail="tiktok"))
+            out.expressed.append(Record(text=t, source=source, detail="tiktok", when=when))
 
     for blob in blobs:
         for node in _iter_dicts(blob):
@@ -114,13 +104,13 @@ def load_blobs(blobs: list) -> TikTokExport:
             for k, v in node.items():
                 if isinstance(v, str):
                     if _SEARCH.search(k):
-                        add(v, "search")
+                        add(v, "search", node_date)
                     elif _HASHTAG.search(k):
-                        add(v, "hashtag")
+                        add(v, "hashtag", node_date)
                     elif _SOUND.search(k):
-                        add(v, "sound")
+                        add(v, "sound", node_date)
                     elif k.strip().lower() == "comment":
-                        add(v, "comment")
+                        add(v, "comment", node_date)
                     elif _URL.search(v) and node_date is not None:
                         out.watch_times.append(node_date)     # served video, timestamp only
                 elif isinstance(v, list) and _INTEREST_KEY.search(k):

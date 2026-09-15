@@ -102,7 +102,8 @@ how many older ones were left out. Passages from other sources are never pushed 
 Search, **Show more passages**, and filter chips let you explore the source text across
 every imported source: filter by source, and once a semantic map exists, by island or by
 signal/noise. Chip counts update with your search and other filters, and the map fades
-passages that don't match. Word counts are lexical counts, not inferred themes.
+passages that don't match. Word counts are lexical counts, not inferred themes; links,
+@handles, and common filler words aren't counted.
 
 The adapters were checked in September 2026 against real published export samples,
 official field documentation (X's archive README), and the UChicago DSAR export schemas.
@@ -151,11 +152,46 @@ TikTok labels appear as gold stars; hovering shows their closest expressed passa
 by cosine similarity in the original embedding space. The 2D plot is exploratory:
 distance alone does not prove a platform inference is wrong. Exports can omit context.
 
+Under the map, **island summaries** give each island a card, largest first: the words most
+specific to that island compared with the rest (c-TF-IDF, so words every island shares
+don't headline a card), where its passages came from and what kind they are (searches,
+watched videos, ads, notes…), how much of it scores as signal, its date span, any assigned
+labels whose closest passage sits in it, and the three passages closest to its typical
+meaning (cosine similarity to the island's mean embedding, in the original embedding
+space). **Show all passages** filters the list to that island. Cards describe what an
+island holds; they aren't names or conclusions about you.
+
+Each card also shows how the island's passages got into your data — written, searched, or
+bought by you; watched, played, visited, or liked; or ads — as a bar with percentages. (A
+Spotify play or YouTube watch can't be told apart from one a recommendation started, so
+those count as watched/played, not as something you chose.) The same bar sits at the top
+of every session, on Android too. When passages are dated, a card charts the island's
+activity on a time axis shared by all cards, names its busiest period, and says whether it
+has been growing, fading, or steady lately: the share of its dated passages in the most
+recent quarter of your history, compared with the whole session's share, so an export
+that simply has more recent data doesn't make everything look like it's growing (at least
+10 dated passages are needed to say). Cards can be ordered by size, by most written or
+searched, by most watched or played, or by growing lately.
+
 Building a map also computes a **Profile Health** panel from the same clustering —
 signal-to-noise (how many passages score as clearly-yours signal vs. noise),
 homogenization (how much of your data collapses into one dominant island vs. a fair
 spread of several), and a combined profile health percentage. Each passage is tagged
-`signal` or `flagged as noise`. All of this is a local read of your own already-computed
+`signal` or `flagged as noise`, and **Why signal? / Why flagged as noise?** under each
+passage shows the four factors multiplied into its score (close to its island's center;
+clearly in one island, not between two; from its source's busiest period or later; typical
+rather than an outlier or in an overcrowded island) and which one is lowest. Under the panel,
+a sentence says which factor most often holds flagged passages back.
+
+How the score is built: each factor counts as at least 0.25 (so no single factor can zero a
+score out), the four are multiplied, and a passage is signal at 0.20 or above. Recency is
+measured from each source's own busiest month — entries from then on count fully, earlier
+ones halve in weight every two years — so a platform you used heavily years ago isn't
+marked stale next to one you use today, and an old export isn't penalized for the time since
+you downloaded it. These settings were checked on a real tweet archive plus a YouTube
+history: most passages inside islands score as signal (88%) while most passages outside
+any island stay noise (71%). The explanations are there so you can check a score rather
+than take a percentage on faith. All of this is a local read of your own already-computed
 embedding space; nothing is sent anywhere, and nothing is fed back into any platform.
 It's a lens on your own data, not a filter applied to it. Every event uses a uniform
 weight for now — a way to mark your own events as more/less representative, and a

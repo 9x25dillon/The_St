@@ -13,8 +13,11 @@ import java.nio.charset.CodingErrorAction;
 /** In-memory data adapter. No file, network, database, or permission access. */
 public final class SaintData {
     private JSONObject state;
-    private static final Set<String> STOP = new HashSet<>(Arrays.asList("the and that this with from have was were are for but not you your my our had has will into just about they them then when what some more been very can".split(" ")));
+    private static final Set<String> STOP = new HashSet<>(Arrays.asList(("the and that this with from have was were are for but not you your my our had has will into just about they them then when what some more been very can "
+        + "there their these those would could should didn doesn don isn wasn aren weren also than only which who how why where because while").split(" ")));
     private static final Pattern WORD = Pattern.compile("[\\p{L}]{3,}");
+    // Links and @handles are URL fragments and other people's names, not words (matches app.py's NOT_WORDS).
+    private static final Pattern NOT_WORDS = Pattern.compile("https?://\\S+|@[\\p{L}\\p{N}_]+");
     private static final Pattern SEARCH = Pattern.compile("search.?term", Pattern.CASE_INSENSITIVE);
     private static final Pattern HASH = Pattern.compile("hashtag.?name|^hashtag$", Pattern.CASE_INSENSITIVE);
     private static final Pattern SOUND = Pattern.compile("sound.?name|song.?name", Pattern.CASE_INSENSITIVE);
@@ -805,7 +808,7 @@ public final class SaintData {
     private static JSONObject summarize(JSONArray records, Set<String> categories, JSONArray watchTimes, JSONArray sources) throws JSONException {
         Map<String,Integer> counts = new LinkedHashMap<>();
         for (int i=0; i<records.length(); i++) {
-            Matcher matcher = WORD.matcher(records.getJSONObject(i).getString("text").toLowerCase(Locale.ROOT));
+            Matcher matcher = WORD.matcher(NOT_WORDS.matcher(records.getJSONObject(i).getString("text")).replaceAll(" ").toLowerCase(Locale.ROOT));
             while (matcher.find()) {
                 String word = matcher.group();
                 if (!STOP.contains(word)) counts.put(word, counts.getOrDefault(word,0)+1);

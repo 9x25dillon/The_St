@@ -8,6 +8,79 @@ let filters = {...NO_FILTERS};
 let notice = '';
 const withNotice = message => notice ? `${notice} ${message}` : message;
 const islandColor = label => label < 0 ? '#acb1a8' : ['#365944','#92a779','#c77b59','#7d8da6','#ac8ba5','#b7a65b'][label % 6];
+let showAllIslands = false;
+const ISLAND_CARD_LIMIT = 12;
+// Record kinds as a person would say them; unknown kinds show as-is.
+const KIND_NAMES = {note: 'notes', search: 'searches', query: 'searches', title: 'page titles', watch: 'watched', ad: 'ads',
+  like: 'likes', post: 'posts', repost: 'reposts', comment: 'comments', hashtag: 'hashtags', sound: 'sounds',
+  caption: 'captions', track: 'tracks', podcast: 'podcasts', audiobook: 'audiobooks', order: 'orders', usage: 'screen time'};
+const MONTH = new Intl.DateTimeFormat(undefined, {month: 'short', year: 'numeric', timeZone: 'UTC'});
+const monthLabel = index => MONTH.format(Date.UTC(Math.floor(index / 12), index % 12));
+const pct = share => `${Math.round(share * 100)}%`;
+// How a passage came to be in your data. Streaming history can't separate a play you chose from
+// one a recommendation started, so plays sit with watched and liked, not with what you wrote.
+const KIND_GROUPS = {expressed: ['note', 'search', 'query', 'post', 'comment', 'caption', 'hashtag', 'order'],
+  consumed: ['watch', 'title', 'track', 'podcast', 'audiobook', 'sound', 'like', 'repost', 'usage'], advertised: ['ad']};
+const GROUP_NAMES = {expressed: 'written, searched, or bought by you', consumed: 'watched, played, visited, or liked',
+  advertised: 'ads', other: 'other'};
+const GROUP_OF = Object.fromEntries(Object.entries(KIND_GROUPS).flatMap(([group, kinds]) => kinds.map(kind => [kind, group])));
+function mixOf(kindCounts) {
+  const totals = {expressed: 0, consumed: 0, advertised: 0, other: 0};
+  let all = 0;
+  for (const [kind, n] of kindCounts) { totals[GROUP_OF[kind] || 'other'] += n; all += n; }
+  return Object.fromEntries(Object.entries(totals).map(([group, n]) => [group, all ? n / all : 0]));
+}
+function mixBar(mix) {
+  const wrap = node('div', '', 'mix'), bar = node('div', '', 'mix-bar'), legend = node('p', '', 'small mix-legend');
+  bar.setAttribute('aria-hidden', 'true');
+  for (const group of Object.keys(mix)) {
+    if (!mix[group]) continue;
+    const segment = node('span', '', `segment ${group}`);
+    segment.style.setProperty('--share', mix[group]);
+    bar.append(segment);
+    if (legend.childNodes.length) legend.append(' · ');
+    legend.append(node('span', `${pct(mix[group])} ${GROUP_NAMES[group]}`, `key ${group}`));
+  }
+  wrap.append(bar, legend);
+  return wrap;
+}
+// The factors multiplied into a passage's score (app.py FACTORS, same order and tie rule).
+const FACTORS = ['fit', 'clarity', 'recency', 'typical'];
+const FACTOR_LABELS = {fit: "Close to its island's center", clarity: 'Clearly in one island, not between two',
+  recency: "From its source's busiest period or later", typical: 'Typical: not an outlier or in an overcrowded island'};
+const FACTOR_REASONS = {fit: "sitting far from their island's center", clarity: 'sitting between two islands',
+  recency: "coming from well before their source's busiest period", typical: 'being outliers or in an overcrowded island'};
+function why(point) {
+  const details = node('details', '', 'why');
+  details.append(node('summary', point.signal ? 'Why signal?' : 'Why flagged as noise?'),
+    node('p', `Score ${point.iws.toFixed(2)}; signal needs ${state.map.health.threshold}. Each factor counts as at least ${state.map.health.floor}, then the four are multiplied:`));
+  const floor = state.map.health.floor, lowest = FACTORS.reduce((a, b) => point.factors[b] < point.factors[a] ? b : a), list = node('ul', '', 'factors');
+  FACTORS.forEach(key => {
+    const measured = point.factors[key], counted = floor + (1 - floor) * measured;
+    list.append(node('li', `${FACTOR_LABELS[key]}: ${measured.toFixed(2)}, counts as ${counted.toFixed(2)}${key === lowest ? ' (lowest)' : ''}`));
+  });
+  details.append(list);
+  return details;
+}
+function sparkline(counts, color) {
+  const ns = 'http://www.w3.org/2000/svg', width = 240, height = 36, max = Math.max(...counts, 1), step = width / counts.length;
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`); svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', 'spark'); svg.setAttribute('aria-hidden', 'true');
+  counts.forEach((n, i) => {
+    if (!n) return;
+    const bar = document.createElementNS(ns, 'rect'), barHeight = Math.max(1.5, n / max * (height - 2));
+    for (const [name, value] of [['x', i * step], ['y', height - barHeight], ['width', Math.max(step - 0.6, 0.8)], ['height', barHeight], ['fill', color]]) bar.setAttribute(name, value);
+    svg.append(bar);
+  });
+  return svg;
+}
+function trendSentence(trend) {
+  const since = MONTH.format(trend.since * 1000), island = pct(trend.island_recent), session = pct(trend.session_recent);
+  if (trend.label === 'growing') return `Growing lately: ${island} of its dated passages are from ${since} on, against ${session} of the whole session.`;
+  if (trend.label === 'fading') return `Fading lately: ${island} of its dated passages are from ${since} on, against ${session} of the whole session.`;
+  return `Steady: ${island} of its dated passages are from ${since} on, close to the session's ${session}.`;
+}
 // File-based sources: accept pattern + file-input label. Missing entries (firefox,
 // chrome) read a local browser profile server-side instead of taking an upload.
 const SOURCES = {
@@ -16,10 +89,10 @@ const SOURCES = {
   tiktok: {label: 'TikTok JSON export files', accept: '.json'},
   youtube: {label: 'YouTube Takeout JSON files (watch-history.json, search-history.json)', accept: '.json'},
   instagram: {label: 'Instagram "Download your information" JSON files', accept: '.json'},
-  x: {label: 'X/Twitter export .js files (e.g. search-history.js)', accept: '.js'},
-  spotify: {label: 'Spotify extended streaming history JSON files', accept: '.json'},
+  x: {label: 'X/Twitter archive .js files (tweets.js, like.js, saved-search.js, personalization.js)', accept: '.js'},
+  spotify: {label: 'Spotify streaming history or account data JSON files', accept: '.json'},
   reddit: {label: 'Reddit posts.csv / comments.csv files', accept: '.csv'},
-  amazon: {label: 'Amazon order history CSV (Retail.OrderHistory.*.csv)', accept: '.csv'},
+  amazon: {label: 'Amazon order history CSV (Order History.csv or Retail.OrderHistory.*.csv)', accept: '.csv'},
   usage: {label: 'A usage.json screen-time file ({app, minutes, date} rows)', accept: '.json'},
 };
 const SOURCE_NAMES = {notes: 'personal notes', tiktok: 'TikTok export', youtube: 'YouTube history',
@@ -53,11 +126,14 @@ function passages() {
   });
   visible = new Set(selected.map(r => r.index));
   renderFilters(counts);
+  document.querySelectorAll('.island').forEach(card => card.classList.toggle('active', filters.island === Number(card.dataset.label)));
   $('records').replaceChildren(...selected.slice(0,limit).map(r => {
     const card = node('article','','passage');
     const point = state.map?.points[r.index];
     const island = point ? ` · ${point.label < 0 ? 'unclustered' : `island ${point.label}`} · outlier score ${point.outlier?.toFixed(2) ?? 'unavailable'} · ${point.signal ? 'signal' : 'flagged as noise'}` : '';
-    card.append(node('small', `${r.detail} · ${r.source}${island}`),node('p',r.text)); return card;
+    card.append(node('small', `${r.detail} · ${r.source}${island}`),node('p',r.text));
+    if (point?.factors) card.append(why(point));
+    return card;
   }));
   if(!selected.length) $('records').append(node('p','No matching passages.','muted'));
   $('more').hidden = selected.length <= limit;
@@ -98,6 +174,58 @@ function renderFilters(counts) {
   // Rebuilding the chips would otherwise drop keyboard focus after every toggle.
   if (focused) [...$('filters').querySelectorAll('button')].find(b => b.dataset.filter === focused)?.focus();
 }
+function renderIslands() {
+  const islands = state.map?.islands;
+  $('islands-wrap').hidden = !islands;
+  if (!islands) return;
+  const order = $('island-sort').value, growth = island => island.trend ? island.trend.island_recent / island.trend.session_recent : -1;
+  const ranked = [...islands].sort((a, b) => order === 'expressed' ? mixOf(b.kinds).expressed - mixOf(a.kinds).expressed
+    : order === 'consumed' ? mixOf(b.kinds).consumed - mixOf(a.kinds).consumed : order === 'growing' ? growth(b) - growth(a) : 0);
+  $('island-sort').hidden = islands.length < 2;
+  const axis = state.map.activity_axis;
+  const unclustered = state.map.unclustered || 0;
+  $('unclustered').textContent = !islands.length
+    ? 'No islands formed. An island needs at least 10 closely related passages; importing more can help.'
+    : unclustered ? `${count(unclustered, 'passage', 'passages')} didn't settle into any island.` : '';
+  $('more-islands').hidden = islands.length <= ISLAND_CARD_LIMIT;
+  $('more-islands').textContent = showAllIslands ? 'Show fewer islands' : `Show all ${islands.length} islands`;
+  $('islands').replaceChildren(...(showAllIslands ? ranked : ranked.slice(0, ISLAND_CARD_LIMIT)).map(island => {
+    const card = node('article', '', 'island');
+    card.dataset.label = island.label;
+    card.style.setProperty('--swatch', islandColor(island.label));
+    const head = node('div', '', 'island-head');
+    head.append(node('h4', island.terms.length ? island.terms.slice(0, 3).join(' · ') : `Island ${island.label}`), node('span', `island ${island.label}`, 'badge'));
+    const facts = [count(island.size, 'passage', 'passages'), `${Math.round(island.share * 100)}% of this session`, `${Math.round(island.signal_share * 100)}% signal`];
+    if (island.first_when !== null) {
+      const [first, last] = [island.first_when, island.last_when].map(t => MONTH.format(t * 1000));
+      facts.push(first === last ? first : `${first} – ${last}`);
+    }
+    card.append(head, node('p', facts.join(' · '), 'muted small'), mixBar(mixOf(island.kinds)));
+    if (island.activity && axis) {
+      const busiest = island.activity.indexOf(Math.max(...island.activity));
+      const axisLabels = node('div', '', 'spark-axis');
+      axisLabels.append(node('span', monthLabel(axis.first_month)), node('span', monthLabel(axis.first_month + axis.buckets * axis.bucket_months - 1)));
+      card.append(sparkline(island.activity, islandColor(island.label)), axisLabels,
+        node('p', `Busiest ${axis.bucket_months > 1 ? 'around' : 'in'} ${monthLabel(axis.first_month + busiest * axis.bucket_months)}.${island.trend ? ` ${trendSentence(island.trend)}` : ''}`, 'small'));
+    }
+    if (island.terms.length > 3) card.append(node('p', `Also: ${island.terms.slice(3).join(' · ')}`, 'small'));
+    card.append(node('p', `From ${island.sources.map(([s, n]) => `${SOURCE_NAMES[s] || s} ${n}`).join(' · ')} — ${island.kinds.map(([k, n]) => `${KIND_NAMES[k] || k} ${n}`).join(' · ')}`, 'small'));
+    if (island.labels.length) card.append(node('p', `Closest assigned labels: ${island.labels.join(' · ')}`, 'small'));
+    const central = node('ul', '', 'central');
+    island.central.forEach(i => {
+      const record = state.records[i], item = node('li', '');
+      // Some adapters set detail to just the source id ("x", "spotify"); the date says more there.
+      const provenance = [record.when !== null ? MONTH.format(record.when * 1000) : '', record.detail !== record.origin ? record.detail : ''];
+      item.append(node('p', record.text), node('small', provenance.filter(Boolean).join(' · ')));
+      central.append(item);
+    });
+    const show = node('button', `Show all ${count(island.size, 'passage', 'passages')}`, 'quiet');
+    show.type = 'button';
+    show.onclick = () => { filters = {...NO_FILTERS, island: island.label}; $('search').value = ''; limit = 40; passages(); $('filters').scrollIntoView({behavior: 'smooth', block: 'start'}); };
+    card.append(central, show);
+    return card;
+  }));
+}
 function draw() {
   if (!state?.map) return;
   const canvas = $('map'), ctx = canvas.getContext('2d');
@@ -137,7 +265,18 @@ function render() {
     $('health-snr').textContent=`${Math.round(health.snr*100)}%`;
     $('health-homog').textContent=`${Math.round(health.homogenization*100)}%`;
     $('health-score').textContent=`${Math.round(health.profile_health*100)}%`;
+    const held=health.held_back_by||[], flagged=held.reduce((n,[,c])=>n+c,0), largest=state.map.islands?.[0];
+    const note=[`${pct(health.snr)} of passages score as signal (${health.threshold} or higher).`];
+    if(held.length)note.push(`Of the rest, ${pct(held[0][1]/flagged)} are held back most by ${FACTOR_REASONS[held[0][0]]}; open "Why flagged as noise?" on any passage to see its factors.`);
+    if(largest)note.push(`Homogenization: the largest island${largest.terms.length?` ("${largest.terms.slice(0,3).join(' · ')}")`:''} holds ${pct(health.homogenization)} of the passages in islands.`);
+    note.push('Profile health is signal-to-noise × (1 − homogenization).');
+    $('health-note').textContent=note.join(' ');
   }
+  $('health-note').hidden=!health;
+  const kinds=Object.entries(state.records.reduce((m,r)=>(m[r.source]=(m[r.source]||0)+1,m),{}));
+  $('mix').hidden=!kinds.length;
+  $('mix').replaceChildren(...(kinds.length?[mixBar(mixOf(kinds))]:[]));
+  renderIslands();
   $('categories').replaceChildren();
   if(state.categories.length) $('categories').append(node('h3','Platform-assigned labels'),node('p',state.categories.join(' · ')));
   if (state.platform === 'android') {
@@ -155,15 +294,19 @@ function render() {
 // duration, which is right for a user-initiated click but wrong for an invisible background
 // trigger -- and a request that loses a race with an in-flight analysis from a prior import
 // (409, "still running") must back off quietly rather than retry in a tight synchronous loop
-// that starves out the Clear button.
+// that starves out the Clear button. After the back-off it looks again: nothing else re-renders
+// once that older analysis finishes (its result is discarded and job.status stays 'idle', so
+// no poll runs), and without this second look the newest import never got a map.
 function maybeAutoAnalyze() {
   if (autoAnalyzing || busy) return;
   if (!(state.records.length >= 30 && !state.map && state.job.status === 'idle' && state.semantic_installed)) return;
   autoAnalyzing = true;
   (async () => {
+    let lookAgain = false;
     try { await api('/api/analyze', {}); await refresh(); }
-    catch { await new Promise(r => setTimeout(r, 2000)); }
+    catch { lookAgain = true; await new Promise(r => setTimeout(r, 2000)); }
     finally { autoAnalyzing = false; }
+    if (lookAgain) refresh().catch(() => {});
   })();
 }
 async function refresh() {
@@ -230,7 +373,9 @@ $('import').onclick=()=>action(async()=>{
 $('demo').onclick=()=>action(async()=>{const result=await api('/api/import',{source:'demo'});notice=result.changed===false?(result.dropped?importSummary(result):'The sample journal is already in your session.'):'Sample journal loaded. These are synthetic passages.';limit=40;$('search').value='';filters={...NO_FILTERS};await refresh();if(state.job.status==='idle')status(notice);});
 $('clear').onclick=()=>action(async()=>{await api('/api/clear',{});notice='';$('files').value='';$('search').value='';$('point-detail').textContent='Hover or click a point to read its passage.';await refresh();status(window.SaintAndroid ? 'Session cleared.' : 'Session cleared. A running analysis releases its memory when it finishes.');});
 $('analyze').onclick=()=>action(async()=>{notice='';await api('/api/analyze',{});await refresh();});
-$('search').oninput=()=>{limit=40;passages();};$('more').onclick=()=>{limit+=40;passages();};
+$('search').oninput=()=>{limit=40;passages();};
+$('more-islands').onclick=()=>{showAllIslands=!showAllIslands;renderIslands();passages();};
+$('island-sort').onchange=()=>{renderIslands();passages();};$('more').onclick=()=>{limit+=40;passages();};
 function inspect(event){const rect=$('map').getBoundingClientRect(),x=(event.clientX-rect.left)*900/rect.width,y=(event.clientY-rect.top)*380/rect.height;const closest=hits.reduce((best,p)=>{const d=Math.hypot(p.x-x,p.y-y);return d<best.d?{d,p}:best;},{d:22});if(closest.p)$('point-detail').textContent=closest.p.text;}
 $('map').onmousemove=inspect;$('map').onclick=inspect;
 if (window.SaintAndroid) {

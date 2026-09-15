@@ -28,6 +28,7 @@ What this deliberately does NOT implement yet, and why:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import time
 from typing import TYPE_CHECKING
 
@@ -85,10 +86,22 @@ def divergence_penalty(mid_vectors, labels) -> np.ndarray:
     return out
 
 
-def recency_decay(timestamps, now: float | None = None, half_life_days: float = 14.0) -> np.ndarray:
+RECENCY_HALF_LIFE_DAYS = 730.0
+
+
+def recency_decay(timestamps, now: float | None = None, half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> np.ndarray:
     """R(t): exponential recency weight. A missing timestamp gets a neutral 1.0, not a
     penalty -- sources without dates (notes, browser history) shouldn't always look stale
-    next to sources that happen to carry one."""
+    next to sources that happen to carry one.
+
+    Half-life is two years (was 14 days): the past year keeps ~70% of its weight, a 2-year-old
+    entry counts half, a 4-year-old one a quarter. With 14 days, and signal needing IWS >= 0.35,
+    anything older than a few weeks could never be signal, so a real 2014-2022 tweet archive
+    scored 0% everywhere. Measured on that archive (2026-09): even with recency removed, only
+    7% of passages reached the threshold -- the divergence term is the usual limiting factor
+    there -- so a longer half-life stops recency from erasing history but doesn't by itself make
+    old exports score as signal. semantic_map uses usage_peak_recency instead, which measures
+    age from each source's busiest month rather than from today."""
     import numpy as np
     now = time.time() if now is None else now
     lam = np.log(2) / (half_life_days * _SECONDS_PER_DAY)
@@ -96,6 +109,34 @@ def recency_decay(timestamps, now: float | None = None, half_life_days: float = 
     for i, t in enumerate(timestamps):
         if t is not None:
             out[i] = np.exp(-lam * max(now - t, 0.0))
+    return out
+
+
+def usage_peak_recency(timestamps, sources, half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> np.ndarray:
+    """R(t) measured from each source's busiest month instead of from today: entries from the
+    start of that month or later count fully (1.0); earlier ones fade with the same half-life.
+    A source you stopped using years ago isn't marked stale against one you use now, and an old
+    export isn't penalized for the time since it was downloaded. Ties between equally busy months
+    go to the later one. Undated entries stay neutral (1.0).
+
+    Chosen by the user (2026-09). On a real 2014-2022 tweet archive plus a 2021-2022 YouTube
+    history, median recency went from 0.02 (measured from today) to 1.00."""
+    import numpy as np
+    from collections import Counter
+    months = {}
+    for t, source in zip(timestamps, sources):
+        if t is not None:
+            moment = datetime.fromtimestamp(t, tz=timezone.utc)
+            months.setdefault(source, Counter())[(moment.year, moment.month)] += 1
+    anchors = {}
+    for source, counts in months.items():
+        year, month = max(counts, key=lambda ym: (counts[ym], ym))
+        anchors[source] = datetime(year, month, 1, tzinfo=timezone.utc).timestamp()
+    lam = np.log(2) / (half_life_days * _SECONDS_PER_DAY)
+    out = np.ones(len(timestamps))
+    for i, (t, source) in enumerate(zip(timestamps, sources)):
+        if t is not None:
+            out[i] = np.exp(-lam * max(anchors[source] - t, 0.0))
     return out
 
 
@@ -132,17 +173,36 @@ def noise_exposure(outlier_scores, labels, *, alpha: float = 0.6, beta: float = 
     return np.clip(alpha * outlier + beta * homogenization, 0, 1)
 
 
-def injection_weight(anchor, divergence, recency, noise, weights=None) -> np.ndarray:
-    """IWS = w * A * D * R * (1 - N). w defaults to a uniform 1.0 (no declared per-event
-    intent yet -- see module docstring)."""
+# Every factor counts as at least this much before the four are multiplied, and a passage is
+# signal at SIGNAL_THRESHOLD or above. Both chosen together (2026-09, the user asked to soften all
+# four factors equally and lower the cutoff from 0.35). Softening every factor with the same
+# power (e.g. square roots) would only rescale the product -- the same as moving the cutoff --
+# so softening is a floor instead: factor' = floor + (1 - floor) * factor, which stops any one
+# factor from zeroing a score. Measured on a real tweet archive plus a YouTube history (563
+# passages, 188 outside any island): floor 0 / cutoff 0.35 marked 54% of island passages and
+# 2% of unclustered ones as signal; 0.25 / 0.20 marks 88% and 29% (a 0.5 floor reached 79% of
+# unclustered passages at 0.25 -- too loose to mean anything). floor=0 reproduces the original
+# IWS = w * A * D * R * (1 - N).
+FACTOR_FLOOR = 0.25
+SIGNAL_THRESHOLD = 0.20
+
+
+def soften(values, floor: float = FACTOR_FLOOR):
+    import numpy as np
+    return floor + (1 - floor) * np.asarray(values, dtype=float)
+
+
+def injection_weight(anchor, divergence, recency, noise, weights=None, floor: float = FACTOR_FLOOR) -> np.ndarray:
+    """IWS = w * A' * D' * R' * (1 - N)', each factor softened by `soften`. w defaults to a
+    uniform 1.0 (no declared per-event intent yet -- see module docstring)."""
     import numpy as np
     anchor, divergence, recency, noise = (np.asarray(a, dtype=float)
                                            for a in (anchor, divergence, recency, noise))
     w = np.ones_like(anchor) if weights is None else np.asarray(weights, dtype=float)
-    return w * anchor * divergence * recency * (1 - noise)
+    return w * soften(anchor, floor) * soften(divergence, floor) * soften(recency, floor) * soften(1 - noise, floor)
 
 
-def signal_to_noise(iws, threshold: float = 0.35) -> float:
+def signal_to_noise(iws, threshold: float = SIGNAL_THRESHOLD) -> float:
     """Fraction of passages at/above the signal threshold. 1.0 for an empty set (nothing
     to call noise yet)."""
     import numpy as np

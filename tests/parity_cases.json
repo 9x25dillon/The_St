@@ -274,5 +274,37 @@
     1709317351
    ]
   }
+ },
+ {
+  "name": "words: links, @handles, and filler words aren't counted",
+  "files": [
+   {
+    "name": "journal.md",
+    "text": "# Links\n\nRead https://example.com/garden-tips with @friend: garden, garden tips. Didn't there would."
+   }
+  ],
+  "expect": {
+   "detected_source": "notes",
+   "records": [
+    [
+     "Read https://example.com/garden-tips with @friend: garden, garden tips. Didn't there would.",
+     "note"
+    ]
+   ],
+   "terms": [
+    [
+     "garden",
+     2
+    ],
+    [
+     "read",
+     1
+    ],
+    [
+     "tips",
+     1
+    ]
+   ]
+  }
  }
 ]

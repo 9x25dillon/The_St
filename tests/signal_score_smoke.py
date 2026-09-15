@@ -10,9 +10,11 @@ import unittest
 
 import numpy as np
 
-from signal_score import (anchor_strength, divergence_penalty, recency_decay,
+from datetime import datetime, timezone
+
+from signal_score import (anchor_strength, divergence_penalty, recency_decay, usage_peak_recency,
                            homogenization_index, noise_exposure, injection_weight,
-                           signal_to_noise, profile_health)
+                           signal_to_noise, profile_health, SIGNAL_THRESHOLD, FACTOR_FLOOR)
 
 
 def _two_clusters():
@@ -53,11 +55,33 @@ class RecencyTests(unittest.TestCase):
         r = recency_decay([None, None], now=time.time())
         self.assertTrue((r == 1.0).all())
 
+    def test_default_half_life_is_two_years(self):
+        now = 1_000_000_000.0
+        two_years = recency_decay([now - 730 * 86_400], now=now)
+        self.assertAlmostEqual(float(two_years[0]), 0.5, places=6)
+
     def test_one_half_life_decays_to_half(self):
         now = 1_000_000.0
-        half_life_days = 14.0
+        half_life_days = 14.0  # any explicit half-life is honored
         r = recency_decay([now - half_life_days * 86_400], now=now, half_life_days=half_life_days)
         self.assertAlmostEqual(r[0], 0.5, places=6)
+
+
+class UsagePeakRecencyTests(unittest.TestCase):
+    def test_each_source_measured_from_its_own_busiest_month(self):
+        def at(year, month, day=10):
+            return datetime(year, month, day, tzinfo=timezone.utc).timestamp()
+        timestamps = [at(2015, 6), at(2015, 6, 20), at(2015, 1), at(2020, 3),   # x: busiest Jun 2015
+                      at(2022, 5), at(2021, 5), None]                            # youtube: tie -> later month
+        sources = ['x', 'x', 'x', 'x', 'youtube', 'youtube', 'notes']
+        r = usage_peak_recency(timestamps, sources)
+        self.assertEqual(float(r[0]), 1.0)                     # in the busiest month
+        self.assertEqual(float(r[3]), 1.0)                     # after it
+        june_first = datetime(2015, 6, 1, tzinfo=timezone.utc).timestamp()
+        self.assertAlmostEqual(float(r[2]), 0.5 ** ((june_first - at(2015, 1)) / 86_400 / 730), places=6)
+        self.assertEqual(float(r[4]), 1.0)                     # youtube's later equally busy month
+        self.assertLess(float(r[5]), 1.0)
+        self.assertEqual(float(r[6]), 1.0)                     # undated stays neutral
 
 
 class HomogenizationTests(unittest.TestCase):
@@ -90,8 +114,15 @@ class NoiseExposureTests(unittest.TestCase):
 
 class CompositeScoreTests(unittest.TestCase):
     def test_injection_weight_regression(self):
-        iws = injection_weight([0.5], [0.8], [0.9], [0.2])
+        iws = injection_weight([0.5], [0.8], [0.9], [0.2], floor=0.0)  # floor 0: the original product
         self.assertAlmostEqual(iws[0], 0.5 * 0.8 * 0.9 * 0.8, places=6)
+
+    def test_softened_factors_cannot_zero_a_score(self):
+        self.assertEqual((FACTOR_FLOOR, SIGNAL_THRESHOLD), (0.25, 0.20))
+        soft = lambda f: 0.25 + 0.75 * f
+        iws = injection_weight([0.5, 0.0], [0.8, 1.0], [0.9, 1.0], [0.2, 0.0])
+        self.assertAlmostEqual(iws[0], soft(0.5) * soft(0.8) * soft(0.9) * soft(0.8), places=6)
+        self.assertAlmostEqual(iws[1], 0.25, places=6)          # one factor at zero still leaves a quarter
 
     def test_signal_to_noise_ratio(self):
         self.assertAlmostEqual(signal_to_noise([0.5, 0.2, 0.9], threshold=0.35), 2 / 3, places=6)

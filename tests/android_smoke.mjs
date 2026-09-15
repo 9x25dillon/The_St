@@ -43,6 +43,8 @@ try {
   await evaluate("document.getElementById('demo').click()");
   await until("document.getElementById('count').textContent === '61 passages'");
   assert.match(await evaluate("document.getElementById('sources-row').textContent"),/personal notes.*1|sample journal.*60/);
+  assert.match(await evaluate("document.getElementById('mix').textContent"),/^100% written, searched, or bought by you$/);
+  assert.equal(await evaluate("document.getElementById('islands-wrap').hidden"),true);
   const chip=value=>`[...document.querySelectorAll('#filters button')].find(b=>b.dataset.filter===${JSON.stringify(value)})`;
   await evaluate(`${chip('origin:notes')}.click()`);
   assert.equal(await evaluate("document.querySelectorAll('.passage').length"),1);
@@ -71,6 +73,7 @@ try {
     if (c.expect.when) assert.deepEqual(st.records.map(r=>r.when===null?null:Math.floor(r.when)), c.expect.when, c.name);
     assert.deepEqual(st.categories, c.expect.categories ?? [], c.name);
     assert.equal(st.watches, c.expect.watches ?? 0, c.name);
+    if (c.expect.terms) assert.deepEqual(st.terms, c.expect.terms, c.name);
     assert.equal(st.watch_times, undefined, 'watch timestamps stay private');
   }
 
@@ -105,5 +108,5 @@ try {
   await evaluate("document.getElementById('clear').click()");
   await until("document.getElementById('count').textContent === '0 passages'");
   assert.equal(await evaluate("document.getElementById('empty').hidden"),false);
-  console.log(`Android smoke passed: native bridge, mobile sources, sample, search, note import, auto-detect, source filter, duplicate imports, ${parityCases.length} shared parsing cases, newest-first trimming, failed-import recovery, escaping, layout, clear.`);
+  console.log(`Android smoke passed: native bridge, mobile sources, sample, search, note import, auto-detect, session mix, source filter, duplicate imports, ${parityCases.length} shared parsing cases, newest-first trimming, failed-import recovery, escaping, layout, clear.`);
 } finally { ws?.close(); }

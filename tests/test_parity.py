@@ -28,6 +28,8 @@ class ParityTests(unittest.TestCase):
                     self.assertEqual([None if r['when'] is None else int(r['when']) for r in snapshot['records']], expect['when'])
                 self.assertEqual(snapshot['categories'], expect.get('categories', []))
                 self.assertEqual(snapshot['watches'], expect.get('watches', 0))
+                if 'terms' in expect:
+                    self.assertEqual([list(term) for term in snapshot['terms']], expect['terms'])
 
 
 if __name__ == '__main__':

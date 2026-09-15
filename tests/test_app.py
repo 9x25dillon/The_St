@@ -4,10 +4,11 @@ import sqlite3
 from pathlib import Path
 import tempfile
 import threading
+from datetime import datetime, timezone
 import unittest
 from unittest.mock import patch
 
-from app import Server, detect_source, import_data
+from app import Server, activity_axis, detect_source, held_back_by, import_data, island_summaries, recent_trend, word_terms
 from mirror import _read_history
 
 
@@ -81,6 +82,73 @@ class ImportTests(unittest.TestCase):
                 self.assertEqual(connection.execute('SELECT count(*) FROM urls').fetchone()[0], 1)
             finally:
                 connection.close()
+
+
+class IslandSummaryTests(unittest.TestCase):
+    def test_links_handles_and_filler_are_not_words(self):
+        records = [{'text': "Read https://example.com/garden-tips with @friend: garden, garden tips. Didn't there would."}]
+        self.assertEqual(word_terms(records), [('garden', 2), ('read', 1), ('tips', 1)])
+
+    def test_summaries_describe_each_island(self):
+        def record(text, origin, source, when=None):
+            return {'text': text, 'origin': origin, 'source': source, 'detail': 'x', 'when': when}
+        records = [
+            record('Planted tomatoes today, a sunny day', 'notes', 'note', 100.0),     # 0  island 1
+            record('Watered the tomatoes, sunny day again', 'notes', 'note', 300.0),   # 1  island 1
+            record('tomatoes and basil seedlings', 'youtube', 'search', 200.0),        # 2  island 1
+            record('Piano scales before a sunny day', 'notes', 'note'),                # 3  island 0
+            record('Recorded piano chords', 'spotify', 'track'),                       # 4  island 0
+            record('Sunny day, piano practice', 'youtube', 'watch'),                   # 5  island 0
+            record('Unrelated curiosity click', 'youtube', 'watch'),                   # 6  unclustered
+        ]
+        labels = [1, 1, 1, 0, 0, 0, -1]
+        centrality = [0.9, 0.5, 0.95, 0.2, 0.8, 0.6, -1.0]
+        signals = [True, True, False, True, True, True, False]
+        islands = island_summaries(records, labels, centrality, signals,
+                                   stars=[('Gardening', 2), ('Music', 4), ('Oddities', 6)], top_passages=2)
+        self.assertEqual([island['label'] for island in islands], [0, 1])  # equal sizes: lower label first
+        music, garden = islands
+        # "sunny" and "day" appear in both islands, so they don't headline either card.
+        self.assertEqual(garden['terms'][0], 'tomatoes')
+        self.assertEqual(music['terms'][0], 'piano')
+        self.assertEqual(garden['central'], [2, 0])
+        self.assertEqual(garden['sources'], [('notes', 2), ('youtube', 1)])
+        self.assertEqual(garden['kinds'], [('note', 2), ('search', 1)])
+        self.assertAlmostEqual(garden['share'], 3 / 7)
+        self.assertAlmostEqual(garden['signal_share'], 2 / 3)
+        self.assertEqual((garden['first_when'], garden['last_when']), (100.0, 300.0))
+        self.assertEqual((garden['activity'], music['activity']), ([3], None))  # all three dates fall in one month
+        self.assertIsNone(garden['trend'])  # under 10 dated passages
+        self.assertEqual((music['first_when'], music['last_when']), (None, None))
+        self.assertEqual((garden['labels'], music['labels']), (['Gardening'], ['Music']))
+
+    def test_held_back_by_counts_each_flagged_passages_lowest_factor(self):
+        rows = [{'fit': 0.9, 'clarity': 0.2, 'recency': 1.0, 'typical': 0.6},   # flagged: clarity
+                {'fit': 0.3, 'clarity': 0.3, 'recency': 1.0, 'typical': 0.6},   # flagged: tie -> fit (listed first)
+                {'fit': 0.8, 'clarity': 0.1, 'recency': 0.9, 'typical': 0.7},   # flagged: clarity
+                {'fit': 0.1, 'clarity': 0.9, 'recency': 0.9, 'typical': 0.9}]   # signal: not counted
+        self.assertEqual(held_back_by(rows, [False, False, False, True]), [('clarity', 2), ('fit', 1)])
+
+    def test_activity_axis_groups_long_histories_into_equal_buckets(self):
+        def at(year, month):
+            return datetime(year, month, 15, tzinfo=timezone.utc).timestamp()
+        self.assertIsNone(activity_axis([{'when': None}]))
+        short = activity_axis([{'when': at(2024, 1)}, {'when': at(2024, 3)}])
+        self.assertEqual((short['bucket_months'], short['buckets']), (1, 3))
+        long = activity_axis([{'when': at(2014, 4)}, {'when': at(2022, 10)}])  # 103 months
+        self.assertEqual((long['bucket_months'], long['buckets']), (2, 52))
+
+    def test_recent_trend_is_relative_to_the_session(self):
+        session = list(range(0, 100))            # evenly spread: the recent quarter (t >= 74.25) holds 25%
+        self.assertEqual(recent_trend([80 + i for i in range(10)], session)['label'], 'growing')   # 100% recent
+        self.assertEqual(recent_trend(list(range(10)), session)['label'], 'fading')               # 0% recent
+        steady = recent_trend([10, 20, 30, 40, 50, 60, 70, 80, 90, 95], session)
+        self.assertEqual(steady['label'], 'steady')
+        self.assertAlmostEqual(steady['island_recent'], 0.3)
+        self.assertIsNone(recent_trend([80, 90, 95], session))  # too few dated passages to say
+
+    def test_no_islands_when_everything_is_unclustered(self):
+        self.assertEqual(island_summaries([{'text': 'alone', 'source': 'note', 'when': None}], [-1], [-1.0], [False]), [])
 
 
 class HTTPTests(unittest.TestCase):

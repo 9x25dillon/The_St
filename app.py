@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import asdict
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
+import math
 from pathlib import Path
 import re
 import secrets
@@ -28,7 +30,11 @@ from x import load_files as load_x_files
 ASSETS = Path(__file__).parent / 'web'
 MAX_REQUEST = 64_000_000  # one file (up to 32 MB) per request, with room for JSON escaping; real Spotify history files run ~12.8 MB
 MAX_IMPORT_RECORDS = 100_000  # parsing safety bound; the session itself keeps MAX_RECORDS
-STOP = set('the and that this with from have was were are for but not you your my our had has will into just about they them then when what some more been very can'.split())
+STOP = set('the and that this with from have was were are for but not you your my our had has will into just about they them then when what some more been very can '
+           'there their these those would could should didn doesn don isn wasn aren weren also than only which who how why where because while'.split())
+# Links and @handles are URL fragments and other people's names, not words from the passage.
+NOT_WORDS = re.compile(r"https?://\S+|@\w+")
+WORD = re.compile(r"[^\W\d_]{3,}")
 
 # Auto-detect: filename patterns for the standard export tools ship, checked in order.
 # A file that matches none of these needs a manual pick from the dropdown -- auto-detect
@@ -65,10 +71,110 @@ def detect_source(files):
                      'Import one source at a time.')
 
 
+def words(text):
+    return [word for word in WORD.findall(NOT_WORDS.sub(' ', text).lower()) if word not in STOP]
+
+
 def word_terms(record_dicts):
-    words = Counter(word for r in record_dicts for word in re.findall(r"[^\W\d_]{3,}", r['text'].lower())
-                    if word not in STOP)
-    return words.most_common(16)
+    return Counter(word for r in record_dicts for word in words(r['text'])).most_common(16)
+
+
+# The four multiplied factors of a passage's score (signal_score.injection_weight), in the order
+# the page lists them; ties for "lowest" go to the earlier one.
+FACTORS = ('fit', 'clarity', 'recency', 'typical')
+
+
+def held_back_by(factor_rows, signals):
+    """For passages flagged as noise, how many have each factor as their lowest -- what most
+    often keeps passages below the signal threshold. [(factor, count)], most common first."""
+    lowest = Counter(min(FACTORS, key=lambda name: row[name])
+                     for row, signal in zip(factor_rows, signals) if not signal)
+    return sorted(lowest.items(), key=lambda item: (-item[1], FACTORS.index(item[0])))
+
+
+def _month(ts):
+    moment = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return moment.year * 12 + moment.month - 1
+
+
+def activity_axis(records, max_buckets=60):
+    """Shared time axis for island activity charts: the session's dated span in whole months,
+    grouped into at most `max_buckets` equal buckets. None when nothing is dated."""
+    months = [_month(r['when']) for r in records if r.get('when') is not None]
+    if not months:
+        return None
+    first, span = min(months), max(months) - min(months) + 1
+    size = -(-span // max_buckets)
+    return {'first_month': first, 'bucket_months': size, 'buckets': -(-span // size)}
+
+
+def recent_trend(island_times, session_times, min_dated=10):
+    """Is this island a bigger or smaller part of the most recent quarter of the session's
+    dated history than of the session overall? Compared with the session's own recent share,
+    so an export that simply has more recent data doesn't make every island look like it's
+    growing. None when there are too few dated passages to say."""
+    if len(island_times) < min_dated or len(session_times) < 2 or max(session_times) <= min(session_times):
+        return None
+    start, end = min(session_times), max(session_times)
+    since = end - (end - start) / 4
+    island_recent = sum(t >= since for t in island_times) / len(island_times)
+    session_recent = sum(t >= since for t in session_times) / len(session_times)
+    ratio = island_recent / session_recent
+    return {'label': 'growing' if ratio >= 1.5 else 'fading' if ratio <= 0.5 else 'steady',
+            'island_recent': island_recent, 'session_recent': session_recent, 'since': since}
+
+
+def island_summaries(records, labels, centrality, signals, stars=(), top_terms=6, top_passages=3):
+    """Describe each behavioral island for the page, largest first. Pure Python.
+
+    labels: HDBSCAN label per record (-1 = unclustered). centrality: per record, how close it
+    sits to its island's typical meaning (higher = more representative). signals: per-record
+    signal flag. stars: (assigned label, index of its closest passage) pairs.
+
+    Words are c-TF-IDF: how much of this island's wording a word makes up, weighted by how
+    rare the word is across all passages (unclustered ones included), counting only words in
+    2+ of the island's passages. Checked on the sample journal and a real 515-tweet archive:
+    plain frequency headlined words every island shares and one-off link fragments; this
+    doesn't. Ties keep the order words first appear, so a card reads like its passages."""
+    counts, passages_with, first_seen, total = {}, {}, {}, Counter()
+    for label, passage_words in zip(labels, (words(r['text']) for r in records)):
+        counts.setdefault(label, Counter()).update(passage_words)
+        passages_with.setdefault(label, Counter()).update(set(passage_words))
+        for word in passage_words:
+            first_seen.setdefault((label, word), len(first_seen))
+        total.update(passage_words)
+    average_words = sum(total.values()) / max(len(counts), 1)
+    members = {}
+    for index, label in enumerate(labels):
+        if label != -1:
+            members.setdefault(label, []).append(index)
+    axis = activity_axis(records)
+    session_times = [r['when'] for r in records if r.get('when') is not None]
+    summaries = []
+    for label, indices in members.items():
+        size = sum(counts[label].values()) or 1
+        scored = [(word, n / size * math.log(1 + average_words / total[word]))
+                  for word, n in counts[label].items() if passages_with[label][word] >= 2]
+        scored.sort(key=lambda item: (-round(item[1], 12), first_seen[(label, item[0])]))
+        dated = [records[i]['when'] for i in indices if records[i].get('when') is not None]
+        activity = None
+        if axis and dated:
+            activity = [0] * axis['buckets']
+            for ts in dated:
+                activity[(_month(ts) - axis['first_month']) // axis['bucket_months']] += 1
+        summaries.append({
+            'label': label, 'size': len(indices), 'share': len(indices) / len(records),
+            'terms': [word for word, _ in scored[:top_terms]],
+            'sources': Counter(records[i].get('origin') or 'unknown' for i in indices).most_common(),
+            'kinds': Counter(records[i]['source'] for i in indices).most_common(),
+            'signal_share': sum(1 for i in indices if signals[i]) / len(indices),
+            'first_when': min(dated) if dated else None, 'last_when': max(dated) if dated else None,
+            'activity': activity, 'trend': recent_trend(dated, session_times),
+            'central': sorted(indices, key=lambda i: -centrality[i])[:top_passages],
+            'labels': sorted({text for text, index in stars if labels[index] == label}),
+        })
+    summaries.sort(key=lambda island: (-island['size'], island['label']))
+    return summaries
 
 
 def summarize(records, categories=(), watch_times=()):
@@ -273,15 +379,31 @@ def semantic_map(snapshot):
     labels = estimator.labels_
     anchor = sig.anchor_strength(mid, labels)
     divergence = sig.divergence_penalty(mid, labels)
-    recency = sig.recency_decay(timestamps)
+    recency = sig.usage_peak_recency(timestamps, [r.get('origin') for r in snapshot['records']])
     noise = sig.noise_exposure(estimator.outlier_scores_, labels)
     iws = sig.injection_weight(anchor, divergence, recency, noise)
+    signals = [bool(w >= sig.SIGNAL_THRESHOLD) for w in iws]
+    # Per-passage factors (as measured, before softening) so the page can say why a passage is
+    # or isn't signal; the page applies health['floor'] to show what each one counts as.
+    factor_rows = [{'fit': round(float(a), 3), 'clarity': round(float(d), 3), 'recency': round(float(r), 3),
+                    'typical': round(float(1 - n), 3)} for a, d, r, n in zip(anchor, divergence, recency, noise)]
     snr = sig.signal_to_noise(iws)
     homogenization = sig.homogenization_index(labels)
     health = {'snr': snr, 'homogenization': homogenization,
-              'profile_health': sig.profile_health(snr, homogenization)}
+              'profile_health': sig.profile_health(snr, homogenization),
+              'threshold': sig.SIGNAL_THRESHOLD, 'floor': sig.FACTOR_FLOOR,
+              'held_back_by': held_back_by(factor_rows, signals)}
 
-    stars = []
+    # How typical each passage is of its island: cosine similarity to the island's mean
+    # embedding, in the original embedding space (like the star matching below), not in the
+    # 15D or 2D projections. Unclustered passages get -1.
+    centrality = np.full(len(texts), -1.0)
+    for label in set(labels.tolist()) - {-1}:
+        members = labels == label
+        center = vectors[members].mean(axis=0)
+        centrality[members] = vectors[members] @ (center / (np.linalg.norm(center) or 1.0))
+
+    stars, star_pairs = [], []
     if snapshot['categories']:
         cv = embed(snapshot['categories'], offline=True)
         positions = reducer.transform(cv)
@@ -290,11 +412,15 @@ def semantic_map(snapshot):
         stars = [{'text': text, 'x': float(pos[0]), 'y': float(pos[1]),
                   'nearest': texts[int(index)], 'similarity': float(cv[i] @ vectors[index])}
                  for i, (text, pos, index) in enumerate(zip(snapshot['categories'], positions, nearest))]
+        star_pairs = list(zip(snapshot['categories'], nearest.tolist()))
     points = [{'x': float(pos[0]), 'y': float(pos[1]), 'label': int(label),
                'outlier': float(score) if np.isfinite(score) else None,
-               'iws': float(w), 'signal': bool(w >= 0.35)}
-              for pos, label, score, w in zip(reducer.embedding_, labels, estimator.outlier_scores_, iws)]
-    return {'points': points, 'stars': stars, 'health': health}
+               'iws': float(w), 'signal': signal, 'factors': factors}
+              for pos, label, score, w, signal, factors
+              in zip(reducer.embedding_, labels, estimator.outlier_scores_, iws, signals, factor_rows)]
+    islands = island_summaries(snapshot['records'], labels.tolist(), centrality.tolist(), signals, star_pairs)
+    return {'points': points, 'stars': stars, 'health': health, 'islands': islands,
+            'unclustered': int((labels == -1).sum()), 'activity_axis': activity_axis(snapshot['records'])}
 
 
 class Server(ThreadingHTTPServer):

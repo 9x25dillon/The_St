@@ -73,8 +73,16 @@ Messenger-export fix); Spotify's `searchTime` "[UTC]" suffix (stripped defensive
   real exports, dedupe imports, add explore filters") on `origin/main`, followed by a
   hand-off update commit. Verify with `git log --oneline -3` rather than trusting this
   file.
-- The installed APK on the Pixel is this session's build (41,618 bytes, still
-  `versionName 0.1.0` / `versionCode 1`). The GitHub `v0.1.0` release is further behind.
+- **Released `v0.2.0`** (prerelease, debug-signed):
+  https://github.com/9x25dillon/The_St/releases/tag/v0.2.0 — tag on full SHA
+  `36949149ace04a13a8405e8879e201b082929a89` (the `versionCode 2` / `versionName 0.2.0`
+  bump commit). Assets: `the-saint-0.2.0-debug.apk` (41,618 bytes, SHA-256
+  `82fc6fde6c08bf6466ec57124903e70ebe0caca3c9d382432e6b965236a6d314`) and
+  `SHA256SUMS.txt`. The signing certificate (SHA-256 `e25db2fa…58c94b`) matches v0.1.0, so
+  it updates in place. The downloaded asset was checked byte-identical to the build
+  installed and smoke-tested on the Pixel (smoke test + 12.8 MB Spotify import). Not
+  re-tested for this release: a hand-driven Android document-picker import (that code is
+  unchanged since v0.1.0).
 
 ## Implementation map (this session)
 
@@ -137,7 +145,10 @@ Messenger-export fix); Spotify's `searchTime` "[UTC]" suffix (stripped defensive
    ("Comment Text" format unverified), Instagram post comments (localized field names make
    the container ambiguous), X note tweets and Grok chats, TikTok DMs (deliberately never).
 4. The four long-standing deferred items still need their own design conversations.
-5. Before any Android release: bump `versionCode`/`versionName`, publish against a full SHA.
+5. Before the next Android release (after v0.2.0): bump `versionCode`/`versionName`, keep
+   the same `android/build/development.keystore` (compare `apksigner verify --print-certs`
+   against the previous release asset), publish against a full SHA, and check the
+   downloaded asset against `SHA256SUMS.txt`.
 
 ## Session retrospective
 

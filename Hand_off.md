@@ -27,6 +27,109 @@ The user picked **"per-file + keep newest"** for the size question: the page sen
 selections in parts so the cap is per file (32 MB desktop, 16 MB Android), and past 5,000
 passages a source keeps its most recent entries instead of the import failing.
 
+## Later in the session: v0.2.0 release, then island summaries
+
+After the hardening work was pushed, the user asked for an Android release (`v0.2.0`,
+details under "Repository and publication") and then for **island summaries**, using the
+description from the options list as the spec: once a map exists, a card per island with
+its size, distinctive words, sources, most central passages, and a button that filters the
+passage list to it. Added: date span, signal share, and the assigned labels whose closest
+passage falls in the island.
+
+- **Words:** c-TF-IDF (`island_summaries` in `app.py`, pure Python so the base suite tests
+  it). Checked before building on the sample journal and the real 515-tweet public archive
+  used earlier: plain frequency headlined shared words and link fragments, c-TF-IDF didn't;
+  ties keep first-appearance order so cards read naturally.
+- **Word cleaning (both platforms):** that same check showed `https`, `t.co` fragments and
+  @handles in the word lists, so links and @handles are stripped and the stopword list
+  gained common filler (`there`, `would`, contraction stems like `didn`) — in `app.py`
+  (`words`, `NOT_WORDS`, `STOP`) and `SaintData.java` (`NOT_WORDS`, `STOP`). This also
+  changes "Words that keep returning". A shared parity case covers it.
+- **Central passages:** cosine similarity to the island's mean embedding in the original
+  embedding space (computed in `semantic_map`), not the 15D/2D projections.
+- **Payload:** `map.islands` (largest first) and `map.unclustered`; cards render from
+  record indices, so passage text isn't duplicated.
+- **Bug fixed along the way (pre-existing):** when an import landed while an older
+  analysis was still running, auto-analysis got a 409, backed off 2 s, and never looked
+  again — the newest import silently got no map. `maybeAutoAnalyze` now refreshes once
+  after the back-off (still outside the `busy` mutex; see the prior hand-off's pitfall).
+- Android shows no map, so no cards; only the word-cleaning change reaches the phone.
+- **Finding raised with the user:** on the real tweet archive every island showed "0%
+  signal" (then a 14-day recency half-life). The user chose a longer half-life; what that
+  did and didn't fix is in the next section.
+
+Island-summary evidence: 69 base tests and `semantic_smoke.py` (new island assertions)
+pass; `browser_smoke.mjs` checks card rendering, escaping, provenance, and the card's
+"Show all" filter via an injected map payload (no model needed); the on-device Android
+smoke test passed with 12 shared cases (new words case); a headless real-map run built
+cards for the journal (six clean cards: "cooked · dinner · friends", "hiked · ridge ·
+dawn", ...) and the real tweet archive (4 islands + 5 unclustered, including a link-only
+island headed "Island 0"), with "Show all" filtering to the island and no horizontal
+scroll at 390 px. That run is also the scenario where auto-analysis used to stall; the map
+built.
+
+## Then: recency half-life, and making the scores useful
+
+The user answered the recency finding with "use a longer half-life", then asked to
+"continue designing and building the usefulness of these algorithms to the user".
+
+- **Half-life:** `signal_score.RECENCY_HALF_LIFE_DAYS = 730` (was 14). Measured first on the
+  real tweet archive: even with recency removed, only 7% of passages reached the 0.35
+  threshold, so the half-life was never the main limit. `clarity` (the divergence term,
+  `1 - d1/d2`) was the lowest factor for 371 of 510 clustered tweets, median 0.27.
+  **Not changed and worth raising with the user:** the threshold and the divergence
+  formula are their framework; real data rarely clears 0.35.
+- **Designed from that finding** (no persistence, no new permissions):
+  1. *Why this score* — map points carry `factors` (`fit`, `clarity`, `recency`, `typical`
+     = anchor, divergence, recency, 1 − noise); each passage gets a "Why signal? / Why
+     flagged as noise?" disclosure naming the lowest factor. `health.held_back_by`
+     (`held_back_by()` in `app.py`) drives a sentence under Profile Health.
+  2. *Written vs consumed* — a stacked bar for the session (top of results, works on
+     Android since it's computed in `app.js` from record kinds) and per island. Grouping
+     table `KIND_GROUPS` in `app.js`; plays and watches count as consumed because the
+     exports can't separate chosen from recommended.
+  3. *Island activity over time* — `activity_axis()` (shared axis, ≤60 month buckets) and
+     per-island `activity` counts; `recent_trend()` compares the island's share of dated
+     passages in the latest quarter of the session's span with the session's own share
+     (growing ≥1.5×, fading ≤0.5×, needs ≥10 dated). Checked on the real tweets before
+     locking thresholds. Cards show a sparkline, busiest period, and the trend with both
+     percentages so the evidence is visible.
+  4. Island cards can be sorted by size, most written/searched, most consumed, growing.
+- Also fixed stale upload labels in `app.js` (X said `search-history.js`; Amazon named only
+  the old file).
+
+Evidence for this round: 72 base tests (new: `held_back_by`, `activity_axis`,
+`recent_trend`, island activity) and 14 scoring tests pass; `semantic_smoke.py` asserts
+factors, `held_back_by` totals, and undated islands; `browser_smoke.mjs` checks the "why"
+panel, health sentence, session and island mix, sparkline, and trend text via an injected
+map; `android_smoke.mjs` passed on the Pixel including the session mix bar. A headless
+real-map run on the real tweet archive plus a generated 48-entry YouTube history (watches,
+searches, ads, 2021-2022) produced: the YouTube island as 20% written/searched, 53%
+watched, 27% ads, sorted first by "most watched", marked growing; tweet islands mostly
+fading or steady; working "Why flagged as noise?" (e.g. score 0.08, recency 0.26 lowest);
+no horizontal scroll at 390 px. A legend bug found there (text ran together for screen
+readers/copying) was fixed with real separators.
+
+**Resolved with the user (scoring calibration):** asked to "lower the cutoff, soften the
+factors, and measure recency from the most often utilized", clarified to *all four factors
+softened equally* and *each source's own busiest month*. Implemented in `signal_score.py`:
+- `usage_peak_recency(timestamps, sources)`: age measured from the start of each source's
+  busiest month (ties -> later month); entries from then on count 1.0, earlier ones decay
+  with the 2-year half-life. Median recency on the mixed session went 0.02 -> 1.00.
+- `FACTOR_FLOOR = 0.25` via `soften()`: each factor counts as `0.25 + 0.75 * value` before
+  multiplying. Not a power/square root: applying the same power to every factor only
+  rescales the product, which is identical to moving the cutoff and would have made the
+  "soften" request a no-op. `floor=0` reproduces the original IWS.
+- `SIGNAL_THRESHOLD = 0.20` (was 0.35). Picked from a floor x cutoff grid measured on the
+  synthetic journal, the real tweets, and tweets + YouTube (563 passages, 188 unclustered):
+  0 / 0.35 gave 54% of island passages vs 2% of unclustered as signal; 0.25 / 0.20 gives
+  88% vs 29%. A 0.5 floor let 79% of unclustered passages through at 0.25. Softening didn't
+  improve separation (~60 points at every low floor); it moves the operating point.
+- Live app, same mixed session: islands 88% / unclustered 29% signal, SNR 68%,
+  homogenization 13%, profile health 59% (all were 0% signal before); the "why" panel
+  shows measured and counted values; flagged passages are now held back mostly by
+  sitting between islands (61%), not by age.
+
 ## What the research found (and what changed because of it)
 
 Each was confirmed against a real sample or official schema, not recalled:
@@ -73,6 +176,9 @@ Messenger-export fix); Spotify's `searchTime` "[UTC]" suffix (stripped defensive
   real exports, dedupe imports, add explore filters") on `origin/main`, followed by a
   hand-off update commit. Verify with `git log --oneline -3` rather than trusting this
   file.
+- **Pushed after the release**: `1f8c89f` ("Add island summaries, score explanations, and
+  recalibrate the signal score") on `origin/main`, covering the island summaries, the
+  usefulness work, and the scoring recalibration. The released `v0.2.0` APK predates it.
 - **Released `v0.2.0`** (prerelease, debug-signed):
   https://github.com/9x25dillon/The_St/releases/tag/v0.2.0 — tag on full SHA
   `36949149ace04a13a8405e8879e201b082929a89` (the `versionCode 2` / `versionName 0.2.0`
@@ -141,11 +247,14 @@ Messenger-export fix); Spotify's `searchTime` "[UTC]" suffix (stripped defensive
    Amazon). When they arrive, run each `python <adapter>.py <path> --inspect` and compare
    counts with what the user expects; that is the remaining verification step. Settle the
    TikTok ad-interest separator from a non-empty real file.
-3. Deferred-but-noticed (not built, not authorized): YouTube Takeout `comments.csv`
+3. The scoring constants (`RECENCY_HALF_LIFE_DAYS`, `FACTOR_FLOOR`, `SIGNAL_THRESHOLD`,
+   `usage_peak_recency`) were each the user's explicit choice; re-measure on their real
+   exports before changing them, and ask first.
+4. Deferred-but-noticed (not built, not authorized): YouTube Takeout `comments.csv`
    ("Comment Text" format unverified), Instagram post comments (localized field names make
    the container ambiguous), X note tweets and Grok chats, TikTok DMs (deliberately never).
-4. The four long-standing deferred items still need their own design conversations.
-5. Before the next Android release (after v0.2.0): bump `versionCode`/`versionName`, keep
+5. The four long-standing deferred items still need their own design conversations.
+6. Before the next Android release (after v0.2.0): bump `versionCode`/`versionName`, keep
    the same `android/build/development.keystore` (compare `apksigner verify --print-certs`
    against the previous release asset), publish against a full SHA, and check the
    downloaded asset against `SHA256SUMS.txt`.

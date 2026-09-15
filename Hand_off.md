@@ -272,42 +272,62 @@ Messenger-export fix); Spotify's `searchTime` "[UTC]" suffix (stripped defensive
 
 ## Session retrospective
 
+Covers the whole day: hardening, the v0.2.0 release, island summaries, the usefulness
+work, the scoring recalibration, and v0.2.1.
+
 Three opportunities for the assistant:
 
-1. **Think through how a new batching path interacts with existing rules before
-   building.** Splitting imports into per-file parts quietly changed two things that
-   had worked: which passages count as duplicates (timestamps in the key) and which
-   entries "keep newest" keeps (per part instead of per source). Both were foreseeable
-   from the design; both were caught only by a real-size run.
-2. **Prefer primary data over summaries from the start.** The first research round used
-   blog summaries and web-search digests that were too vague to code against; the useful
-   facts all came from real files on GitHub, an official README, and a schema dataset.
-   Going there first would have saved a round.
-3. **Race-proof test scripts too.** A throwaway screenshot script clicked a button while
-   the app's busy lock was held and timed out; a leftover full session later broke the
-   smoke test. Wait for `!busy` and clean up state in `finally`.
+1. **Go to primary sources first.** The opening research round used web-search digests
+   and blog posts too vague to code against. Every fact that ended up in the adapters came
+   from real export files on GitHub, X's own archive README, and the UChicago schema
+   dataset. Starting there would have saved a round.
+2. **Check what a new path interacts with before building it.** Splitting imports into
+   per-file parts quietly changed which passages count as duplicates (timestamps in the
+   key) and which ones "keep newest" keeps (per part instead of per source). Both were
+   foreseeable from the design; both surfaced only in a late real-size run.
+3. **Treat throwaway scripts as code.** A screenshot script clicked a button while the
+   app's busy lock was held; a crashed run left a full session behind and broke the next
+   test; a doubled backslash made a regex match nothing; a literal newline landed inside a
+   line of JavaScript sent to the browser. Wait for `!busy`, clean up in `finally`, and
+   check an escape before blaming the app. (Twice a unit test also asserted the opposite of
+   its own comment — compute the expectation, don't type it from memory.)
 
 Three opportunities for the user, if named at the outset:
 
-1. "Continue developing and building the app" left direction open, which took an
-   orientation pass plus a choice between options. Naming a goal ("make it work on my
-   real exports", "better exploration") would skip that step.
-2. Real export files are the single most valuable input for this project. Requesting them
-   now, even ones that take weeks (Spotify extended history, Reddit, Amazon), means they'll
-   be ready for the next session.
-3. Policy decisions like size limits and what to drop come up mid-task. Stating
-   preferences up front ("never silently drop data", "phone memory matters more than
-   completeness") lets them be applied without a pause.
+1. **Name a goal, not just a direction.** "Familiarize yourself with the repo and then
+   lets continue developing" needed an orientation pass plus a menu of options before work
+   could start; one sentence about what should be true by the end skips both.
+2. **Spec ambiguous instructions in terms of behavior.** "Soften the factor that counts no
+   just the between two islands" and "measure recency from the most often utalized" each
+   had several readings and cost a clarification round. Two of the three scoring changes
+   needed disambiguating before anything could be built.
+3. **Front-load context that changes the work.** That the connected Pixel isn't the user's
+   phone, and that they'd test on their own, arrived after everything had been verified on
+   that device and two sets of release notes were written. Bundling follow-through helps
+   too: build, commit, and release arrived as separate turns, each re-entering the same
+   context.
 
 Vocabulary:
 
+- **Operating point:** the specific spot chosen on a trade-off curve. The scoring question
+  wasn't "is 0.35 wrong" but "which operating point do we want" — e.g. "most passages
+  inside islands score as signal, few outside ones do" picks floor 0.25 / cutoff 0.20.
+- **Idempotent:** doing it twice changes nothing more than doing it once — what the
+  duplicate-import fix made imports ("re-importing the same export should add nothing").
 - **Parity test:** one set of cases run against two implementations of the same logic
-  (here Python desktop and hand-ported Java Android) so a difference shows up as a test
-  failure instead of a user-visible inconsistency.
+  (Python desktop, hand-ported Java Android) so a difference shows up as a test failure
+  instead of a user-visible inconsistency.
 - **Faceted counts:** filter counts that reflect every other active filter, so a chip
   shows how many results picking it would actually give.
+- Still useful from the previous hand-off: **spec**, **acceptance criteria**, **scope**,
+  **provenance**.
 
-Reusable prompt:
+Reusable prompt shape:
+
+"Goal: [what should be true when done]. Constraints: [what not to touch]. Done means:
+[acceptance criteria]. Decide [X] yourself; ask me about [Y]. Then commit and push."
+
+And for the highest-value next session:
 
 "My exports are in [folder]. Run each adapter's --inspect against them, compare with
 [what I expect], fix mismatches on both desktop and Android, add a parity case for each

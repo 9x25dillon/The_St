@@ -17,7 +17,11 @@ Two kinds of data come out, and they are NOT equivalent:
 
 Every entry is classified by its own "Searched for " / "Watched " title prefix rather
 than by filename, so watch-history.json and search-history.json can be passed together
-or separately, in either order. A standard Takeout export carries no assigned
+or separately, in either order. Entries Takeout marks with details [{"name": "From Google
+Ads"}] are ads YouTube played, not videos you picked -- they are kept apart as `ad`
+records (4 of 7 entries in one real published sample were ads). Checked against real
+Takeout samples and the UChicago DSAR export schemas (2026-09). Takeout can also deliver
+history as HTML; only the JSON format is read. A standard Takeout export carries no assigned
 ad-interest-category stream (that lives in a separate, non-standard Google Ads Settings
 export) -- this adapter never invents one.
 
@@ -36,6 +40,8 @@ from mirror import Record, parse_timestamp
 _SEARCHED = re.compile(r"^searched for\s+", re.I)
 _WATCHED = re.compile(r"^watched\s+", re.I)
 _REMOVED = re.compile(r"a video that has been removed|a video that isn.t available", re.I)
+_BARE_URL = re.compile(r"^https?://", re.I)
+_AD_DETAIL = re.compile(r"google ads", re.I)
 
 
 def _load_json(path: str) -> list:
@@ -77,7 +83,14 @@ def load_blobs(blobs: list) -> list[Record]:
             elif _REMOVED.search(title):
                 continue  # no usable content
             else:
-                text, source = _WATCHED.sub("", title).strip(), "watch"
+                text = _WATCHED.sub("", title).strip()
+                if _BARE_URL.match(text):
+                    continue  # no title recorded, only the link -- nothing to read or embed
+                details = entry.get("details")
+                is_ad = isinstance(details, list) and any(
+                    isinstance(d, dict) and isinstance(d.get("name"), str) and _AD_DETAIL.search(d["name"])
+                    for d in details)
+                source = "ad" if is_ad else "watch"
             key = f"{source}:{text.lower()}"
             if text and key not in seen:
                 seen.add(key)
@@ -99,7 +112,8 @@ if __name__ == "__main__":
         ap.error(str(exc))
     searched = sum(1 for r in records if r.source == "search")
     watched = sum(1 for r in records if r.source == "watch")
-    print(f"searched {searched}, watched {watched}")
+    ads = sum(1 for r in records if r.source == "ad")
+    print(f"searched {searched}, watched {watched}, ads {ads}")
     if not args.inspect:
         if len(records) < 30:
             raise SystemExit(f"only {len(records)} usable records -- too few to cluster meaningfully")

@@ -14,6 +14,13 @@ Two kinds of data come out, and they are NOT equivalent:
   1. POSTS    -- title (+ body, when present). Long-form intent you wrote.
   2. COMMENTS -- body text. Shorter, more reactive intent you wrote.
 
+Headers were checked against the UChicago DSAR export schemas (2026-09): posts.csv is
+id,permalink,date,ip,subreddit,gildings,title,url,body and comments.csv is
+id,permalink,date,ip,subreddit,gildings,link,parent,body,media. "[deleted]"/"[removed]"
+placeholders are dropped. Google Takeout also ships a comments.csv (YouTube comments,
+"Comment Text" column); that one is recognized and refused with a clear message rather
+than silently yielding nothing.
+
 Both are EXPRESSED text -- there is no equivalent of TikTok's assigned ad-interest
 categories in Reddit's standard export, and no served/watch stream (Reddit doesn't export
 your feed impressions). Saved posts and vote history exist in the export but aren't parsed
@@ -38,6 +45,7 @@ _SUBREDDIT_COL = re.compile(r"subreddit", re.I)
 _DATE_COL = re.compile(r"^date$", re.I)
 _POST_HINT = re.compile(r"^(title|url)$", re.I)
 _COMMENT_HINT = re.compile(r"^(parent|link)$", re.I)
+_REMOVED_TEXT = {"[deleted]", "[removed]"}
 
 
 def _parse_reddit_date(value: str | None):
@@ -95,6 +103,9 @@ def load_rows(files: list[dict]) -> list[Record]:
             fieldnames = reader.fieldnames or []
             kind = _classify(fieldnames)
             if kind is None:
+                if any(name and name.strip().lower() == "comment text" for name in fieldnames):
+                    raise ValueError("This comments.csv looks like a YouTube Takeout export, which isn't "
+                                     "supported yet. Choose Reddit's posts.csv or comments.csv.")
                 continue  # not a posts/comments export -- skip rather than guess wrong
             title_col = _find_column(fieldnames, _TITLE_COL)
             body_col = _find_column(fieldnames, _BODY_COL)
@@ -103,6 +114,7 @@ def load_rows(files: list[dict]) -> list[Record]:
             for row in reader:
                 title = (row.get(title_col) or "").strip() if title_col else ""
                 body = (row.get(body_col) or "").strip() if body_col else ""
+                title, body = ("" if title in _REMOVED_TEXT else title), ("" if body in _REMOVED_TEXT else body)
                 text_value = f"{title}. {body}".strip(". ").strip() if kind == "post" else body
                 if not text_value:
                     continue

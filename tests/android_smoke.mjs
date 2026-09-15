@@ -1,5 +1,7 @@
 // On-device smoke test. Forward port 9224 to The Saint's debug WebView first.
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+const parityCases = JSON.parse(await readFile(new URL('./parity_cases.json', import.meta.url), 'utf8'));
 let ws;
 try {
   let tabs;
@@ -41,81 +43,67 @@ try {
   await evaluate("document.getElementById('demo').click()");
   await until("document.getElementById('count').textContent === '61 passages'");
   assert.match(await evaluate("document.getElementById('sources-row').textContent"),/personal notes.*1|sample journal.*60/);
+  const chip=value=>`[...document.querySelectorAll('#filters button')].find(b=>b.dataset.filter===${JSON.stringify(value)})`;
+  await evaluate(`${chip('origin:notes')}.click()`);
+  assert.equal(await evaluate("document.querySelectorAll('.passage').length"),1);
+  assert.equal(await evaluate("document.getElementById('showing').textContent"),'Showing 1 of 61 passages');
+  await evaluate(`${chip('origin:notes')}.click()`);
+  await evaluate("document.getElementById('demo').click()");
+  await until("/already in your session/.test(document.getElementById('status').textContent)");
+  assert.equal(await evaluate("document.getElementById('count').textContent"),'61 passages');
 
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
 
   // Bridge-level checks bypass the file picker: feed {source, files} straight to
-  // SaintAndroid.request, same pattern for every adapter, each starting from a clean slate.
-  await evaluate("SaintAndroid.request('/api/clear','{}')");
-  const exportData = {Activity: [{SearchTerm:'gardens'}, {Hashtag:'#plants'},
-    {Comment:'Quiet mornings'}, {Date:'1970-01-01 00:00:00', Link:'https://www.tiktok.com/video/1'},
-    {Interests:['Gardening','Gardening']}]};
-  const request = {source:'tiktok', files:[{name:'export.json', text:JSON.stringify(exportData)}]};
-  const payload = JSON.stringify(JSON.stringify(request));
-  const imported = await evaluate(`JSON.parse(SaintAndroid.request('/api/import', ${payload}))`);
-  assert.equal(imported.ok,true);
-  let nativeState=await evaluate("JSON.parse(SaintAndroid.request('/api/state','{}'))");
-  assert.equal(nativeState.records.length,3);
-  assert.equal(nativeState.watches,1);
-  assert.deepEqual(nativeState.categories,['Gardening']);
-  const invalid = JSON.stringify(JSON.stringify({source:'notes',files:[{name:'bad.pdf',text:'wrong type'}]}));
-  assert.ok((await evaluate(`JSON.parse(SaintAndroid.request('/api/import', ${invalid}))`)).error);
-  nativeState=await evaluate("JSON.parse(SaintAndroid.request('/api/state','{}'))");
-  assert.equal(nativeState.records.length,3);
+  // SaintAndroid.request, each starting from a clean slate.
+  const bridge = async (path, body) => evaluate(`JSON.parse(SaintAndroid.request(${JSON.stringify(path)}, ${JSON.stringify(JSON.stringify(body))}))`);
+  const nativeState = () => bridge('/api/state', {});
 
-  // YouTube adapter, and auto-detect by filename, through the bridge directly.
-  await evaluate("SaintAndroid.request('/api/clear','{}')");
-  const ytEntries = [
-    {title:'Searched for gardening tips', time:'2024-01-01T00:00:00Z'},
-    {title:'Watched How to prune roses', titleUrl:'https://www.youtube.com/watch?v=abc', time:'2024-01-02T00:00:00Z'},
-    {title:'Watched a video that has been removed', time:'2024-01-03T00:00:00Z'},
-  ];
-  const ytRequest = {source:'auto', files:[{name:'watch-history.json', text:JSON.stringify(ytEntries)}]};
-  const ytPayload = JSON.stringify(JSON.stringify(ytRequest));
-  const ytImported = await evaluate(`JSON.parse(SaintAndroid.request('/api/import', ${ytPayload}))`);
-  assert.equal(ytImported.ok,true);
-  assert.equal(ytImported.detected_source,'youtube');
-  nativeState = await evaluate("JSON.parse(SaintAndroid.request('/api/state','{}'))");
-  assert.equal(nativeState.records.length,2);
-  assert.deepEqual(nativeState.records.map(r=>r.source).sort(),['search','watch']);
-
-  // Remaining adapters, bridge-level, each starting from a clean slate.
-  const cases = [
-    {source:'instagram', name:'your_topics.json',
-     text:JSON.stringify({topics_your_topics:[{string_map_data:{Name:{value:'Cooking'}}}]}),
-     expectCategories:['Cooking']},
-    {source:'spotify', name:'Streaming_History_Audio_1.json',
-     text:JSON.stringify([{ts:'2024-01-01T00:00:00Z',master_metadata_track_name:'A Song',
-       master_metadata_album_artist_name:'A Band'}]),
-     expectText:'A Song — A Band'},
-    {source:'reddit', name:'posts.csv',
-     text:'id,permalink,date,ip,subreddit,gildings,title,url,body\n'
-       +'1,/r/x/1,2024-01-01 00:00:00 UTC,0.0.0.0,gardening,0,Tomato tips,,Water deeply\n',
-     expectText:'Tomato tips. Water deeply'},
-    {source:'amazon', name:'Retail.OrderHistory.1.csv',
-     text:'Order Date,Product Name\n2024-01-01 00:00:00 UTC,A Nice Lamp\n',
-     expectText:'A Nice Lamp'},
-    {source:'usage', name:'usage.json',
-     text:JSON.stringify([{app:'Instagram',minutes:10,date:'2024-01-01'}]),
-     expectText:'Instagram: 10 minutes'},
-    {source:'x', name:'search-history.js',
-     text:'window.YTD.search_history.part0 = '+JSON.stringify([{searchHistory:{query:'gardening tips'}}])+';',
-     expectText:'gardening tips'},
-  ];
-  for (const c of cases) {
-    await evaluate("SaintAndroid.request('/api/clear','{}')");
-    const req = {source:c.source, files:[{name:c.name, text:c.text}]};
-    const reqPayload = JSON.stringify(JSON.stringify(req));
-    const res = await evaluate(`JSON.parse(SaintAndroid.request('/api/import', ${reqPayload}))`);
-    assert.equal(res.ok, true, `${c.source} import failed: ${res.error}`);
-    assert.equal(res.detected_source, c.source, c.source);
-    const st = await evaluate("JSON.parse(SaintAndroid.request('/api/state','{}'))");
-    if (c.expectText) assert.equal(st.records[0].text, c.expectText, c.source);
-    if (c.expectCategories) assert.deepEqual(st.categories, c.expectCategories, c.source);
+  // Shared parsing cases: the same file tests/test_parity.py runs against the desktop adapters.
+  for (const c of parityCases) {
+    await bridge('/api/clear', {});
+    const res = await bridge('/api/import', {source:'auto', files:c.files});
+    if (c.expect_error) { assert.match(res.error ?? '', new RegExp(c.expect_error), c.name); continue; }
+    assert.equal(res.error, undefined, `${c.name}: ${res.error}`);
+    assert.equal(res.detected_source, c.expect.detected_source, c.name);
+    const st = await nativeState();
+    assert.deepEqual(st.records.map(r=>[r.text, r.source]), c.expect.records, c.name);
+    if (c.expect.when) assert.deepEqual(st.records.map(r=>r.when===null?null:Math.floor(r.when)), c.expect.when, c.name);
+    assert.deepEqual(st.categories, c.expect.categories ?? [], c.name);
+    assert.equal(st.watches, c.expect.watches ?? 0, c.name);
+    assert.equal(st.watch_times, undefined, 'watch timestamps stay private');
   }
+
+  // Failed import keeps the session; re-importing the same export is a no-op.
+  await bridge('/api/clear', {});
+  const tiktok = parityCases[0].files;
+  let res = await bridge('/api/import', {source:'tiktok', files:tiktok});
+  assert.deepEqual([res.changed, res.added, res.skipped], [true, 3, 0]);
+  assert.ok((await bridge('/api/import', {source:'notes', files:[{name:'bad.pdf', text:'wrong type'}]})).error);
+  res = await bridge('/api/import', {source:'tiktok', files:tiktok});
+  assert.deepEqual([res.changed, res.added, res.skipped], [false, 0, 3]);
+  let st = await nativeState();
+  assert.deepEqual([st.records.length, st.watches, st.records[0].origin], [3, 2, 'tiktok']);
+
+  // One file per request still checks the whole selection for mixed sources.
+  res = await bridge('/api/import', {source:'auto', names:['diary.md','posts.csv'], files:[{name:'diary.md', text:'Gardens.'}]});
+  assert.match(res.error ?? '', /different sources/);
+
+  // Past 5,000 passages a source keeps its newest entries, whatever order its files arrive in.
+  await bridge('/api/clear', {});
+  const day = i => new Date(Date.UTC(2020, 0, 1) + i * 86400e3).toISOString().slice(0, 10);
+  const usage = (from, to) => ({source:'usage', files:[{name:'usage.json', text:JSON.stringify(
+    Array.from({length:to-from}, (_, k) => ({app:'Notes', minutes:1, date:day(from+k)})))}]});
+  res = await bridge('/api/import', usage(3000, 5200));
+  assert.deepEqual([res.added, res.dropped], [2200, 0]);
+  res = await bridge('/api/import', usage(0, 3000));
+  assert.deepEqual([res.added, res.dropped], [2800, 200]);
+  st = await nativeState();
+  assert.equal(st.records.length, 5000);
+  assert.equal(Math.min(...st.records.map(r=>r.when)), Date.UTC(2020, 0, 1) / 1000 + 200 * 86400);
 
   await evaluate("document.getElementById('clear').click()");
   await until("document.getElementById('count').textContent === '0 passages'");
   assert.equal(await evaluate("document.getElementById('empty').hidden"),false);
-  console.log('Android smoke passed: native bridge, mobile sources, sample, search, note import, auto-detect, combined sessions, TikTok/YouTube/Instagram/X/Spotify/Reddit/Amazon/usage parsing, failed-import recovery, escaping, layout, clear.');
+  console.log(`Android smoke passed: native bridge, mobile sources, sample, search, note import, auto-detect, source filter, duplicate imports, ${parityCases.length} shared parsing cases, newest-first trimming, failed-import recovery, escaping, layout, clear.`);
 } finally { ws?.close(); }

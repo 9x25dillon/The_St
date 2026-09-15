@@ -42,12 +42,27 @@ try {
   await evaluate("document.getElementById('demo').click()");
   await until("document.getElementById('count').textContent === '61 passages'");
   assert.match(await evaluate("document.getElementById('sources-row').textContent"),/personal notes.*1|sample journal.*60/);
+  // Source filter: faceted chip counts ignore their own group, so the other chip keeps its total.
+  const chip=value=>`[...document.querySelectorAll('#filters button')].find(b=>b.dataset.filter===${JSON.stringify(value)})`;
+  await evaluate(`${chip('origin:notes')}.click()`);
+  assert.equal(await evaluate("document.querySelectorAll('.passage').length"),1);
+  assert.equal(await evaluate("document.getElementById('showing').textContent"),'Showing 1 of 61 passages');
+  assert.equal(await evaluate(`${chip('origin:notes')}.getAttribute('aria-pressed')`),'true');
+  assert.match(await evaluate(`${chip('origin:demo')}.textContent`),/sample journal · 60/);
+  await evaluate("document.getElementById('search').value='walk';document.getElementById('search').dispatchEvent(new Event('input'))");
+  assert.match(await evaluate(`${chip('origin:demo')}.textContent`),/sample journal · 12/);
+  await evaluate("[...document.querySelectorAll('#filters button')].find(b=>b.textContent==='Clear filters').click()");
+  assert.equal(await evaluate("document.querySelectorAll('.passage').length"),13);
+  // Re-importing the same source is a no-op, not a doubled session.
+  await evaluate("document.getElementById('demo').click()");
+  await until("/already in your session/.test(document.getElementById('status').textContent)");
+  assert.equal(await evaluate("document.getElementById('count').textContent"),'61 passages');
   await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);
   await evaluate("document.getElementById('clear').click()");
   await until("document.getElementById('count').textContent === '0 passages'");
   assert.equal(await evaluate("document.getElementById('empty').hidden"),false);
-  console.log('Browser smoke passed: sample, search, note upload, text escaping, mobile layout, clear.');
+  console.log('Browser smoke passed: sample, search, note upload, text escaping, source filter, duplicate import, mobile layout, clear.');
 } finally {
   ws?.close();chrome.kill();
   await new Promise(resolve=>chrome.exitCode!==null?resolve():chrome.once('exit',resolve));

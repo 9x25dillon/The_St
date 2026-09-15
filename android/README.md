@@ -44,7 +44,10 @@ may use its own network connection to retrieve a file you select.
 - Auto-detect: drop in an export and the app picks the adapter by filename, the
   same table desktop uses; ambiguous or unrecognized files ask you to pick manually.
 - Imports combine into one session instead of replacing it, with a running list of
-  what's been added and how much.
+  what's been added and how much. Re-importing the same export adds nothing.
+- Files up to 16 MB each (a full Spotify extended-history file is ~12.8 MB). A session
+  holds 5,000 passages; past that, each source keeps its most recent entries.
+- Filter chips narrow passages by source.
 - A sample journal, recurring word counts, passage search, and incremental display.
 - Clear session. A failed import preserves the existing session.
 - Responsive layout that respects system bars and the keyboard.
@@ -76,8 +79,11 @@ and [AAPT2 command-line packaging](https://developer.android.com/tools/aapt2).
 
 Validated on the connected Pixel 10a: installation and launch, the native bridge,
 sample/search flows, auto-detect and combined-session imports, note/TikTok/YouTube/
-Instagram/X/Spotify/Reddit/Amazon/usage parsing, failed-import recovery, text
-escaping, session clearing, and system-bar spacing. A synthetic text file was also
+Instagram/X/Spotify/Reddit/Amazon/usage parsing (including the shared cases in
+`tests/parity_cases.json` that desktop also runs), duplicate imports, newest-first
+trimming, a 12.8 MB Spotify history file through the real file input (imported in about
+a second), the source filter, failed-import recovery, text escaping, session clearing,
+and system-bar spacing. A synthetic text file was also
 imported through the real Android document picker and removed afterward.
 
 To repeat the automated part, launch the app, obtain its PID with

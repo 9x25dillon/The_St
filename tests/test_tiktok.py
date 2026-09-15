@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tiktok import _parse_date, load
+from tiktok import _parse_date, load, load_blobs
 
 
 class ExportTests(unittest.TestCase):
@@ -15,18 +15,44 @@ class ExportTests(unittest.TestCase):
 
     def test_nested_export_and_deduplication(self):
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "export.json"
-            path.write_text(json.dumps({"Activity": [
-                {"SearchTerm": " Gardens "}, {"SearchTerm": "gardens"},
-                {"Hashtag": "#plants"}, {"Comment": "Lovely flowers"},
-                {"Date": "1970-01-01 00:00:00", "Link": "https://www.tiktok.com/video/1"},
-                {"Interests": ["Gardening", "Gardening"]},
-            ]}), encoding="utf-8-sig")
+            path = Path(folder) / "user_data_tiktok.json"
+            path.write_text(json.dumps({
+                "Your Activity": {
+                    "Searches": {"SearchList": [{"Date": "1970-01-01 00:00:00", "SearchTerm": " Gardens "},
+                                                {"Date": "1970-01-01 00:00:00", "SearchTerm": "gardens"}]},
+                    "Hashtag": {"HashtagList": [{"HashtagName": "#plants", "HashtagLink": ""}]},
+                    "Watch History": {"VideoList": [
+                        {"Date": "1970-01-01 00:00:00", "Link": "https://www.tiktokv.com/share/video/1/"}]},
+                },
+                "Comment": {"Comments": {"CommentsList": [
+                    {"date": "1970-01-01 00:00:00", "comment": "Lovely flowers", "photo": "N/A", "url": ""}]}},
+                "Ads and data": {"Ad Interests": {"AdInterestCategories": "Gardening | Gardening | Cooking"}},
+            }), encoding="utf-8-sig")
             result = load(folder)
         self.assertEqual([r.text for r in result.expressed],
                          ["Gardens", "plants", "Lovely flowers"])
         self.assertEqual(result.watch_times, [0])
-        self.assertEqual(result.ad_categories, ["Gardening"])
+        self.assertEqual(result.ad_categories, ["Cooking", "Gardening"])
+
+    def test_only_watch_history_counts_as_watches(self):
+        # Real exports: likes, favorites and shares use the same {Date, Link} shape, favorite
+        # effects/hashtags/sounds link to m.tiktok.com, and your own posts sit under Post.
+        entry = {"Date": "2024-01-01 00:00:00", "Link": "https://www.tiktokv.com/share/video/9/"}
+        result = load_blobs([{
+            "Activity": {
+                "Video Browsing History": {"VideoList": [entry, entry]},
+                "Like List": {"ItemFavoriteList": [{"date": "2024-01-01 00:00:00", "link": entry["Link"]}]},
+                "Favorite Videos": {"FavoriteVideoList": [entry]},
+                "Favorite Sounds": {"FavoriteSoundList": [
+                    {"Date": "2024-01-01 00:00:00", "Link": "https://m.tiktok.com/h5/share/music/1.html"}]},
+                "Share History": {"ShareHistoryList": [dict(entry, SharedContent="video", Method="copy")]},
+            },
+            "Post": {"Posts": {"VideoList": [dict(entry, Title="My tomato harvest")]}},
+            "App Settings": {"Settings": {"SettingsMap": {"Interests": "Cooking"}}},
+        }])
+        self.assertEqual(len(result.watch_times), 2)
+        self.assertEqual([(r.text, r.source) for r in result.expressed], [("My tomato harvest", "caption")])
+        self.assertEqual(result.ad_categories, [])  # self-chosen settings interests are not assigned labels
 
     def test_invalid_inputs_are_reported(self):
         with tempfile.TemporaryDirectory() as folder:

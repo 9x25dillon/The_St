@@ -15,6 +15,18 @@ Two kinds of data come out, and they are NOT equivalent:
   2. ASSIGNED topics  -- "Name" fields inside your_topics.json. Meta's own inferred
                          interest categories for you. Not their weights; their OUTPUT.
 
+Checked against real published exports and the UChicago DSAR export schemas (2026-09):
+search history is `searches_keyword[].string_map_data.Search` (in
+logged_information/recent_searches/word_or_phrase_searches.json) and topics are
+`topics_your_topics[].string_map_data.Name` (in preferences/your_topics/
+recommended_topics.json, formerly your_topics.json). The field names inside
+string_map_data are LOCALIZED to the account's language ("Nome" in a non-English export),
+so entries are classified by the stable container key (topics_* / searches_*) first and
+by English field names only as a fallback. Profile searches (searches_user) are other
+people's usernames, not topics you searched, and are skipped. Meta writes UTF-8 text as
+if each byte were a Latin-1 character ("â€™" for ’); that is undone per value when it
+cleanly round-trips (not observable in the ASCII-only samples, so treat as best-effort).
+
 Ad/post view history is intentionally not parsed for v1 -- it typically carries little
 more than an advertiser name and a timestamp, a volume signal rather than expressible
 text (the same reasoning tiktok.py gives for skipping bare watch links). If a stream comes
@@ -34,16 +46,30 @@ from mirror import Record
 
 _SEARCH_FIELD = re.compile(r"search", re.I)
 _TOPIC_FIELD = re.compile(r"^name$", re.I)
+_TOPIC_CONTAINER = re.compile(r"^topics_", re.I)
+_SEARCH_CONTAINER = re.compile(r"^searches_", re.I)
+_PEOPLE_SEARCH_CONTAINER = re.compile(r"user|profile|account", re.I)
 
 
-def _iter_dicts(node):
+def _iter_dicts(node, path=()):
     if isinstance(node, dict):
-        yield node
-        for v in node.values():
-            yield from _iter_dicts(v)
+        yield node, path
+        for k, v in node.items():
+            yield from _iter_dicts(v, path + (k,))
     elif isinstance(node, list):
         for v in node:
-            yield from _iter_dicts(v)
+            yield from _iter_dicts(v, path)
+
+
+def fix_meta_text(value: str) -> str:
+    """Undo Meta's export encoding, where each UTF-8 byte was stored as a Latin-1 character.
+    Text that doesn't round-trip (real Latin-1 accents, anything beyond U+00FF) is untouched."""
+    if not any(0x80 <= ord(c) <= 0xFF for c in value):
+        return value
+    try:
+        return value.encode("latin-1").decode("utf-8")
+    except UnicodeError:
+        return value
 
 
 def _load_json(path: str) -> list:
@@ -71,32 +97,40 @@ def load_blobs(blobs: list) -> tuple[list[Record], list[str]]:
     expressed: list[Record] = []
     categories: list[str] = []
     seen: set[str] = set()
+    def add_search(value, when):
+        key = f"search:{value.lower()}"
+        if key not in seen:
+            seen.add(key)
+            expressed.append(Record(value, "search", "instagram", when))
+
     for blob in blobs:
-        for node in _iter_dicts(blob):
+        for node, path in _iter_dicts(blob):
             smd = node.get("string_map_data")
             if not isinstance(smd, dict):
                 continue
             when = None
             for v in smd.values():
-                if isinstance(v, dict) and isinstance(v.get("timestamp"), (int, float)):
+                if isinstance(v, dict) and isinstance(v.get("timestamp"), (int, float)) and v["timestamp"]:
                     when = float(v["timestamp"])
+            values = []
             for field, v in smd.items():
-                if not isinstance(v, dict):
-                    continue
-                value = v.get("value")
-                if not isinstance(value, str):
-                    continue
-                value = value.strip()
-                if not value or value.lower() == "not_stored":
-                    continue
-                if _TOPIC_FIELD.match(field):
-                    if 0 < len(value) < 60:
-                        categories.append(value)
-                elif _SEARCH_FIELD.search(field):
-                    key = f"search:{value.lower()}"
-                    if key not in seen:
-                        seen.add(key)
-                        expressed.append(Record(value, "search", "instagram", when))
+                value = v.get("value") if isinstance(v, dict) else None
+                if isinstance(value, str) and value.strip() and value.strip().lower() != "not_stored":
+                    values.append((field, fix_meta_text(value.strip())))
+            container = next((k for k in reversed(path) if isinstance(k, str)
+                              and (_TOPIC_CONTAINER.match(k) or _SEARCH_CONTAINER.match(k))), None)
+            if container and _TOPIC_CONTAINER.match(container):
+                categories += [value for _, value in values if len(value) < 60]
+            elif container:
+                if not _PEOPLE_SEARCH_CONTAINER.search(container) and values:
+                    add_search(values[0][1], when)
+            else:
+                for field, value in values:
+                    if _TOPIC_FIELD.match(field):
+                        if len(value) < 60:
+                            categories.append(value)
+                    elif _SEARCH_FIELD.search(field):
+                        add_search(value, when)
     return expressed, sorted(set(categories))
 
 

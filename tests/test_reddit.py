@@ -27,6 +27,15 @@ class RedditTests(unittest.TestCase):
         other = "id,name\n1,unrelated\n"
         self.assertEqual(load_rows([{"name": "orders.csv", "text": other}]), [])
 
+    def test_removed_placeholders_and_youtube_comments_csv(self):
+        comments = ("id,permalink,date,ip,subreddit,gildings,link,parent,body,media\n"
+                    "3,/r/x/3,2024-01-03 00:00:00 UTC,0.0.0.0,gardening,0,x,y,[deleted],\n"
+                    "4,/r/x/4,2024-01-04 00:00:00 UTC,0.0.0.0,gardening,0,x,y,Still here,\n")
+        self.assertEqual([r.text for r in load_rows([{"name": "comments.csv", "text": comments}])], ["Still here"])
+        youtube = "Comment ID,Channel ID,Comment Create Timestamp,Price,Parent Comment ID,Video ID,Comment Text\n"
+        with self.assertRaisesRegex(ValueError, "YouTube Takeout"):
+            load_rows([{"name": "comments.csv", "text": youtube}])
+
     def test_dedupes_identical_text_within_a_kind(self):
         records = load_rows([{"name": "posts.csv", "text": POSTS_CSV + POSTS_CSV.splitlines()[1] + "\n"}])
         self.assertEqual(len(records), 1)

@@ -4,31 +4,32 @@ The Saint -- X (Twitter) source adapter.
 
 Meets an X "Download an archive of your data" export. Data files live under a `data/`
 folder as `.js` files, each wrapped as a JS assignment --
-`window.YTD.<stream>.part0 = [ ... ];` -- not raw JSON, and the real data is usually
-nested one level deeper under a stream-specific key (`"tweet"`, `"searchHistory"`, ...).
-Which streams exist and how they're nested has drifted before and will again, so this
-strips the `window.YTD...=` wrapper and then walks whatever JSON comes out, classifying by
-key name wherever it appears -- the same "the schema drifts, so scan rather than hard-code"
-approach tiktok.py and instagram.py already take. If a stream comes up empty, widen the
-matchers below against your real export -- that tuning is expected.
+`window.YTD.<stream>.part0 = [ ... ];` -- not raw JSON, with the real data nested one level
+deeper under a stream-specific key (`"tweet"`, `"like"`, `"savedSearch"`, ...). This strips
+the wrapper, keeps the stream name it announces, and walks whatever JSON comes out,
+classifying by key name and by the stream/keys leading to it.
 
-Two kinds of data come out, and they are NOT equivalent:
+Checked against X's own archive README (2025-01 archive) and real published archives
+(2026-09). Three kinds of data come out, and they are NOT equivalent:
 
-  1. EXPRESSED text  -- search queries and your own tweet/post text. Intent you typed.
-  2. ASSIGNED topics -- X's own inferred interest categories for you (personalization
-                        data). Not their weights; their OUTPUT -- who they decided you are.
+  1. EXPRESSED text  -- your own posts (tweets.js `full_text`; "RT @..." retweets are kept
+                        apart as `repost`, since the words aren't yours) and saved searches
+                        (saved-search.js `query` -- the archive has no full search history).
+  2. SERVED text     -- liked posts (like.js `fullText`): someone else's words you endorsed,
+                        kept as `like`, never as your own post.
+  3. ASSIGNED topics -- personalization.js `p13nData.interests.interests[]` objects
+                        ({name, isDisabled}; disabled ones are skipped), partnerInterests,
+                        and inferred `shows`. X's OUTPUT about you, not their weights.
 
-Engagement/impression history (likes received, ad impressions, who you follow) is
-intentionally not parsed for v1 -- it's a much less reliable "expressed intent" signal than
-a search query or a tweet you wrote, the same reasoning instagram.py gives for skipping ad
-views. Classic tweet timestamps ("Mon Jan 01 00:00:00 +0000 2024") are not ISO-8601 and are
-not parsed -- `when` is None for those rather than guessing at a second date format.
+Ad impressions, follows, DMs, and Grok chats are intentionally not parsed for v1. Tweet
+timestamps use the classic "Wed Oct 10 20:19:24 +0000 2018" form and are parsed as such.
 
 Run:
     python x.py /path/to/unzipped_export
 """
 from __future__ import annotations
 
+from datetime import datetime
 import glob
 import json
 import os
@@ -36,31 +37,45 @@ import re
 
 from mirror import Record, parse_timestamp
 
-_WRAPPER = re.compile(r"^\s*window\.YTD\.\w+\.part\d+\s*=\s*")
-_QUERY_FIELD = re.compile(r"query", re.I)
+_WRAPPER = re.compile(r"^\s*window\.YTD\.(\w+)\.part\d+\s*=\s*")
+_QUERY_FIELD = re.compile(r"^query$", re.I)
 _TWEET_TEXT_FIELD = re.compile(r"^full_?text$", re.I)
-_INTEREST_FIELD = re.compile(r"interest", re.I)
-_DATE_FIELD = re.compile(r"date|time", re.I)
+_INTEREST_LIST = re.compile(r"^(interests|partnerInterests)$", re.I)
+_DATE_FIELD = re.compile(r"date|time|created.?at", re.I)
 
 
-def _iter_dicts(node):
+def _iter_dicts(node, path=()):
     if isinstance(node, dict):
-        yield node
-        for v in node.values():
-            yield from _iter_dicts(v)
+        yield node, path
+        for k, v in node.items():
+            yield from _iter_dicts(v, path + (k,))
     elif isinstance(node, list):
         for v in node:
-            yield from _iter_dicts(v)
+            yield from _iter_dicts(v, path)
 
 
-def _unwrap(text: str):
-    stripped = text.lstrip("﻿")
-    if stripped.startswith("window.YTD"):
-        stripped = _WRAPPER.sub("", stripped, count=1).rstrip()
+def _parse_date(value: str) -> float | None:
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        try:
+            parsed = datetime.strptime(value.strip(), "%a %b %d %H:%M:%S %z %Y").timestamp()
+        except ValueError:
+            pass
+    return parsed
+
+
+def _unwrap(text: str) -> tuple[str | None, object]:
+    """(stream name from the window.YTD wrapper or None, parsed JSON)."""
+    stripped = text.lstrip("\ufeff")
+    stream = None
+    wrapper = _WRAPPER.match(stripped)
+    if wrapper:
+        stream = wrapper.group(1)
+        stripped = stripped[wrapper.end():].rstrip()
         if stripped.endswith(";"):
             stripped = stripped[:-1]
     try:
-        return json.loads(stripped)
+        return stream, json.loads(stripped)
     except ValueError as exc:
         raise ValueError(f"Cannot read JSON export: {exc}") from exc
 
@@ -87,10 +102,15 @@ def load(path: str) -> tuple[list[Record], list[str]]:
 
 
 def load_files(files: list[dict]) -> tuple[list[Record], list[str]]:
-    return load_blobs([_unwrap(file["text"]) for file in files])
+    return _load_streams([_unwrap(file["text"]) for file in files])
 
 
 def load_blobs(blobs: list) -> tuple[list[Record], list[str]]:
+    """Already-parsed JSON with no wrapper, so no stream name to go on."""
+    return _load_streams([(None, blob) for blob in blobs])
+
+
+def _load_streams(streams: list[tuple[str | None, object]]) -> tuple[list[Record], list[str]]:
     expressed: list[Record] = []
     categories: list[str] = []
     seen: set[str] = set()
@@ -102,26 +122,34 @@ def load_blobs(blobs: list) -> tuple[list[Record], list[str]]:
             seen.add(key)
             expressed.append(Record(t, source, "x", when))
 
-    for blob in blobs:
-        for node in _iter_dicts(blob):
+    def add_label(item):
+        if isinstance(item, dict):
+            if item.get("isDisabled") is True:
+                return
+            item = item.get("name")
+        if isinstance(item, str) and 0 < len(item.strip()) < 60:
+            categories.append(item.strip())
+
+    for stream, blob in streams:
+        for node, path in _iter_dicts(blob, (stream,) if stream else ()):
+            liked = any(isinstance(k, str) and k.lower() == "like" for k in path)
+            in_interests = any(isinstance(k, str) and k.lower() == "interests" for k in path)
             node_date = None
             for k, v in node.items():
                 if isinstance(v, str) and _DATE_FIELD.search(k):
-                    parsed = parse_timestamp(v)
+                    parsed = _parse_date(v)
                     if parsed is not None:
                         node_date = parsed
             for k, v in node.items():
                 if isinstance(v, str):
                     if _TWEET_TEXT_FIELD.match(k):
-                        add(v, "post", node_date)
-                    elif _QUERY_FIELD.search(k):
+                        source = "like" if liked else "repost" if v.lstrip().startswith("RT @") else "post"
+                        add(v, source, node_date)
+                    elif _QUERY_FIELD.match(k):
                         add(v, "search", node_date)
-                    elif _INTEREST_FIELD.search(k):
-                        label = v.strip()
-                        if 0 < len(label) < 60:
-                            categories.append(label)
-                elif isinstance(v, list) and _INTEREST_FIELD.search(k):
-                    categories += [i.strip() for i in v if isinstance(i, str) and 0 < len(i.strip()) < 60]
+                elif isinstance(v, list) and (_INTEREST_LIST.match(k) or (k == "shows" and in_interests)):
+                    for item in v:
+                        add_label(item)
     return expressed, sorted(set(categories))
 
 

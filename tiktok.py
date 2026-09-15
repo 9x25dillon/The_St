@@ -5,8 +5,18 @@ The Saint -- TikTok source adapter.
 Meets a TikTok data export (Settings and privacy > Account > Download your data > JSON).
 The export's schema drifts across app versions and splits across files, so this does NOT
 hard-code paths -- it walks whatever JSON you point it at and finds the streams by their
-shape. Point it at the unzipped export folder (or a single user_data.json). If a stream
-comes up empty, widen the matchers below against your real file -- that tuning is expected.
+shape. Point it at the unzipped export folder (or a single user_data.json /
+user_data_tiktok.json). If a stream comes up empty, widen the matchers below against your
+real file -- that tuning is expected.
+
+Checked against real exports (2022 "Activity" and 2025 "Your Activity" layouts, published
+samples plus RLEAPP's forensic parser, 2026-09): watch-history links point at
+www.tiktokv.com, while likes, favorites, shares and your own posts carry the exact same
+{Date, Link} shape -- so only entries inside a Watch History / Video Browsing History
+section count as watches. AdInterestCategories is a single string, not a list; every real
+sample seen had it empty, so the separator (split here on | , or newline) is unverified.
+The Settings "Interests" field holds interests you picked yourself and is deliberately NOT
+treated as an assigned label.
 
 Three kinds of data come out, and they are NOT equivalent:
 
@@ -34,12 +44,16 @@ from dataclasses import dataclass, field
 
 from mirror import Record, embed, parse_timestamp   # reuse module-one primitives
 
-_URL = re.compile(r"https?://\S*tiktok\.com/\S+", re.I)
+_URL = re.compile(r"https?://\S*tiktokv?\.com/\S+", re.I)
 _DATE_KEY = re.compile(r"date|time", re.I)
 _SEARCH = re.compile(r"search.?term", re.I)
 _HASHTAG = re.compile(r"hashtag.?name|^hashtag$", re.I)
 _SOUND = re.compile(r"sound.?name|song.?name", re.I)
-_INTEREST_KEY = re.compile(r"interest|categor", re.I)
+_COMMENT = re.compile(r"^comment(content)?$", re.I)  # "comment" in comment history, "CommentContent" in LIVE
+_WATCH_SECTION = re.compile(r"watch.?history|video.?browsing", re.I)
+_AD_INTEREST = re.compile(r"ad.?interest", re.I)
+_OWN_POSTS = re.compile(r"^(posts?|videos?)$", re.I)
+_LABEL_SPLIT = re.compile(r"\s*[|,\n]\s*")
 
 
 @dataclass
@@ -52,14 +66,20 @@ class TikTokExport:
 _parse_date = parse_timestamp  # kept as an alias; parsing now lives in mirror.py
 
 
-def _iter_dicts(node):
+def _iter_dicts(node, path=()):
+    """Every dict in the export, with the keys leading to it -- a section name decides
+    what a {Date, Link} entry means."""
     if isinstance(node, dict):
-        yield node
-        for v in node.values():
-            yield from _iter_dicts(v)
+        yield node, path
+        for k, v in node.items():
+            yield from _iter_dicts(v, path + (k,))
     elif isinstance(node, list):
         for v in node:
-            yield from _iter_dicts(v)
+            yield from _iter_dicts(v, path)
+
+
+def _labels(value: str) -> list[str]:
+    return [label for label in _LABEL_SPLIT.split(value.strip()) if 0 < len(label) < 60]
 
 
 def _load_json(path: str) -> list:
@@ -94,7 +114,10 @@ def load_blobs(blobs: list) -> TikTokExport:
             out.expressed.append(Record(text=t, source=source, detail="tiktok", when=when))
 
     for blob in blobs:
-        for node in _iter_dicts(blob):
+        for node, path in _iter_dicts(blob):
+            in_watch_history = any(_WATCH_SECTION.search(k) for k in path)
+            in_own_posts = any(_OWN_POSTS.match(k) for k in path)
+            counted_watch = False
             node_date = None
             for k, v in node.items():
                 if isinstance(v, str) and _DATE_KEY.search(k):
@@ -109,13 +132,17 @@ def load_blobs(blobs: list) -> TikTokExport:
                         add(v, "hashtag", node_date)
                     elif _SOUND.search(k):
                         add(v, "sound", node_date)
-                    elif k.strip().lower() == "comment":
+                    elif _COMMENT.match(k.strip()):
                         add(v, "comment", node_date)
-                    elif _URL.search(v) and node_date is not None:
+                    elif k.strip().lower() == "title" and in_own_posts:
+                        add(v, "caption", node_date)             # caption on a video you posted
+                    elif _AD_INTEREST.search(k):
+                        out.ad_categories += _labels(v)
+                    elif in_watch_history and not counted_watch and node_date is not None and _URL.search(v):
                         out.watch_times.append(node_date)     # served video, timestamp only
-                elif isinstance(v, list) and _INTEREST_KEY.search(k):
-                    out.ad_categories += [i.strip() for i in v
-                                          if isinstance(i, str) and 0 < len(i) < 60]
+                        counted_watch = True
+                elif isinstance(v, list) and _AD_INTEREST.search(k):
+                    out.ad_categories += [label for i in v if isinstance(i, str) for label in _labels(i)]
 
     out.ad_categories = sorted(set(out.ad_categories))
     return out

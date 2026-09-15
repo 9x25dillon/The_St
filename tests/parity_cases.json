@@ -1,0 +1,278 @@
+[
+ {
+  "name": "tiktok: 2025 layout, watches only from watch history",
+  "files": [
+   {
+    "name": "user_data_tiktok.json",
+    "text": "{\"Your Activity\": {\"Searches\": {\"SearchList\": [{\"Date\": \"2025-04-17 13:14:26\", \"SearchTerm\": \" Gardens \"}, {\"Date\": \"2025-04-17 13:15:00\", \"SearchTerm\": \"gardens\"}]}, \"Watch History\": {\"VideoList\": [{\"Date\": \"2025-04-17 13:14:26\", \"Link\": \"https://www.tiktokv.com/share/video/7481942056475184391/\"}, {\"Date\": \"2025-04-17 13:14:28\", \"Link\": \"https://www.tiktokv.com/share/video/7478436003414330670/\"}]}, \"Like List\": {\"ItemFavoriteList\": [{\"date\": \"2025-04-17 13:14:26\", \"link\": \"https://www.tiktokv.com/share/video/1/\"}]}, \"Favorite Sounds\": {\"FavoriteSoundList\": [{\"Date\": \"2025-04-17 13:14:26\", \"Link\": \"https://m.tiktok.com/h5/share/music/1.html\"}]}}, \"Comment\": {\"Comments\": {\"CommentsList\": [{\"date\": \"2025-04-17 13:14:26\", \"comment\": \"Lovely flowers\", \"photo\": \"N/A\", \"url\": \"\"}]}}, \"Post\": {\"Posts\": {\"VideoList\": [{\"Date\": \"2025-04-18 09:00:00\", \"Link\": \"https://www.tiktokv.com/share/video/2/\", \"Title\": \"My tomato harvest\"}]}}, \"Ads and data\": {\"Ad Interests\": {\"AdInterestCategories\": \"Gardening | Cooking\"}}, \"App Settings\": {\"Settings\": {\"SettingsMap\": {\"Interests\": \"Hiking\"}}}}"
+   }
+  ],
+  "expect": {
+   "detected_source": "tiktok",
+   "records": [
+    [
+     "Gardens",
+     "search"
+    ],
+    [
+     "Lovely flowers",
+     "comment"
+    ],
+    [
+     "My tomato harvest",
+     "caption"
+    ]
+   ],
+   "categories": [
+    "Cooking",
+    "Gardening"
+   ],
+   "watches": 2
+  }
+ },
+ {
+  "name": "youtube: ads kept apart, bare links skipped",
+  "files": [
+   {
+    "name": "watch-history.json",
+    "text": "[{\"header\": \"YouTube\", \"title\": \"Watched Spring Seed Sale\", \"titleUrl\": \"https://www.youtube.com/watch?v=ad1\", \"time\": \"2024-01-01T00:00:00.123Z\", \"products\": [\"YouTube\"], \"details\": [{\"name\": \"From Google Ads\"}], \"activityControls\": [\"Web & App Activity\"]}, {\"header\": \"YouTube\", \"title\": \"Watched https://www.youtube.com/watch?v=gone\", \"titleUrl\": \"https://www.youtube.com/watch?v=gone\", \"time\": \"2024-01-01T00:00:00.123Z\"}, {\"header\": \"YouTube\", \"title\": \"Watched Composting basics\", \"titleUrl\": \"https://www.youtube.com/watch?v=c1\", \"time\": \"2024-01-02T00:00:00.456Z\", \"subtitles\": [{\"name\": \"A Channel\", \"url\": \"https://www.youtube.com/channel/x\"}]}, {\"header\": \"YouTube\", \"title\": \"Searched for compost bins\", \"time\": \"2024-01-03T00:00:00.000Z\"}]"
+   }
+  ],
+  "expect": {
+   "detected_source": "youtube",
+   "records": [
+    [
+     "Spring Seed Sale",
+     "ad"
+    ],
+    [
+     "Composting basics",
+     "watch"
+    ],
+    [
+     "compost bins",
+     "search"
+    ]
+   ],
+   "when": [
+    1704067200,
+    1704153600,
+    1704240000
+   ]
+  }
+ },
+ {
+  "name": "youtube: HTML history is refused clearly",
+  "files": [
+   {
+    "name": "watch-history.html",
+    "text": "<!DOCTYPE html><html><body>Watched</body></html>"
+   }
+  ],
+  "expect_error": "HTML version"
+ },
+ {
+  "name": "x: tweets with classic dates, retweets apart",
+  "files": [
+   {
+    "name": "tweets.js",
+    "text": "window.YTD.tweets.part0 = [{\"tweet\": {\"retweeted\": false, \"full_text\": \"Just planted new tomatoes\", \"created_at\": \"Mon Jan 01 00:00:00 +0000 2024\", \"lang\": \"en\"}}, {\"tweet\": {\"retweeted\": false, \"full_text\": \"RT @someone: their words\", \"created_at\": \"Tue Jan 02 00:00:00 +0000 2024\", \"lang\": \"en\"}}]"
+   }
+  ],
+  "expect": {
+   "detected_source": "x",
+   "records": [
+    [
+     "Just planted new tomatoes",
+     "post"
+    ],
+    [
+     "RT @someone: their words",
+     "repost"
+    ]
+   ],
+   "when": [
+    1704067200,
+    1704153600
+   ]
+  }
+ },
+ {
+  "name": "x: likes, saved searches, personalization objects",
+  "files": [
+   {
+    "name": "like.js",
+    "text": "window.YTD.like.part0 = [{\"like\": {\"tweetId\": \"1\", \"fullText\": \"Someone else's tomato photo\", \"expandedUrl\": \"\"}}]"
+   },
+   {
+    "name": "saved-search.js",
+    "text": "window.YTD.saved_search.part0 = [{\"savedSearch\": {\"savedSearchId\": \"1\", \"query\": \"raised beds\"}}]"
+   },
+   {
+    "name": "personalization.js",
+    "text": "window.YTD.personalization.part0 = [{\"p13nData\": {\"demographics\": {\"languages\": [{\"language\": \"English\", \"isDisabled\": false}], \"genderInfo\": {\"gender\": \"x\"}}, \"interests\": {\"interests\": [{\"name\": \"Gardening\", \"isDisabled\": false}, {\"name\": \"Turned off\", \"isDisabled\": true}], \"partnerInterests\": [], \"audienceAndAdvertisers\": {\"advertisers\": [\"@brand\"], \"numAudiences\": \"3\"}, \"shows\": [\"A Garden Show\"]}, \"locationHistory\": [\"Somewhere, Someplace\"]}}]"
+   }
+  ],
+  "expect": {
+   "detected_source": "x",
+   "records": [
+    [
+     "Someone else's tomato photo",
+     "like"
+    ],
+    [
+     "raised beds",
+     "search"
+    ]
+   ],
+   "categories": [
+    "A Garden Show",
+    "Gardening"
+   ]
+  }
+ },
+ {
+  "name": "spotify: extended history drops skips, reads podcasts and audiobooks",
+  "files": [
+   {
+    "name": "Streaming_History_Audio_2025_0.json",
+    "text": "[{\"ts\": \"2025-01-01T10:00:00Z\", \"ms_played\": 200000, \"master_metadata_track_name\": \"Weather\", \"master_metadata_album_artist_name\": \"The National\", \"reason_start\": \"clickrow\", \"skipped\": false}, {\"ts\": \"2025-01-01T10:04:00Z\", \"ms_played\": 4200, \"master_metadata_track_name\": \"Skipped Song\", \"master_metadata_album_artist_name\": \"A Band\", \"reason_start\": \"trackdone\", \"skipped\": true}, {\"ts\": \"2025-01-01T11:00:00Z\", \"ms_played\": 1800000, \"master_metadata_track_name\": null, \"episode_name\": \"Soil 101\", \"episode_show_name\": \"Garden Talk\"}, {\"ts\": \"2025-01-01T12:00:00Z\", \"ms_played\": 600000, \"master_metadata_track_name\": null, \"audiobook_title\": \"A Long Book\", \"audiobook_chapter_title\": \"Chapter 1\"}]"
+   }
+  ],
+  "expect": {
+   "detected_source": "spotify",
+   "records": [
+    [
+     "Weather — The National",
+     "track"
+    ],
+    [
+     "Soil 101 — Garden Talk",
+     "podcast"
+    ],
+    [
+     "Chapter 1 — A Long Book",
+     "audiobook"
+    ]
+   ]
+  }
+ },
+ {
+  "name": "spotify: account data podcasts, searches, inferences",
+  "files": [
+   {
+    "name": "StreamingHistory_podcast_0.json",
+    "text": "[{\"endTime\": \"2024-01-05 08:30\", \"podcastName\": \"Garden Talk\", \"episodeName\": \"Mulch Myths\", \"msPlayed\": 1800000}]"
+   },
+   {
+    "name": "SearchQueries.json",
+    "text": "[{\"platform\": \"IPHONE\", \"searchTime\": \"2024-01-06T10:00:00.000Z[UTC]\", \"searchQuery\": \"compost\", \"searchInteractionURIs\": []}]"
+   },
+   {
+    "name": "Inferences.json",
+    "text": "{\"inferences\": [\"1P_Custom_Gardeners\", \"3P_Home_Improvement\"]}"
+   }
+  ],
+  "expect": {
+   "detected_source": "spotify",
+   "records": [
+    [
+     "Mulch Myths — Garden Talk",
+     "podcast"
+    ],
+    [
+     "compost",
+     "search"
+    ]
+   ],
+   "when": [
+    1704443400,
+    1704535200
+   ],
+   "categories": [
+    "1P Custom Gardeners",
+    "3P Home Improvement"
+   ]
+  }
+ },
+ {
+  "name": "instagram: localized field names, people searches skipped, Meta encoding repaired",
+  "files": [
+   {
+    "name": "recommended_topics.json",
+    "text": "{\"topics_your_topics\": [{\"title\": \"\", \"media_map_data\": {}, \"string_map_data\": {\"Nome\": {\"href\": \"\", \"value\": \"Culin\\u00e1ria\", \"timestamp\": 0}}}]}"
+   },
+   {
+    "name": "word_or_phrase_searches.json",
+    "text": "{\"searches_keyword\": [{\"title\": \"\", \"media_map_data\": {}, \"string_map_data\": {\"Search\": {\"href\": \"\", \"value\": \"caf\\u00c3\\u00a9 \\u00e2\\u0080\\u0099s\", \"timestamp\": 1700000000}, \"Time\": {\"href\": \"\", \"value\": \"\", \"timestamp\": 1700000000}}}], \"searches_user\": [{\"string_map_data\": {\"Search\": {\"value\": \"a.friend\", \"timestamp\": 1700000000}}}]}"
+   }
+  ],
+  "expect": {
+   "detected_source": "instagram",
+   "records": [
+    [
+     "café ’s",
+     "search"
+    ]
+   ],
+   "when": [
+    1700000000
+   ],
+   "categories": [
+    "Culinária"
+   ]
+  }
+ },
+ {
+  "name": "reddit: removed placeholders dropped",
+  "files": [
+   {
+    "name": "comments.csv",
+    "text": "id,permalink,date,ip,subreddit,gildings,link,parent,body,media\n3,/r/x/3,2024-01-03 00:00:00 UTC,0.0.0.0,gardening,0,x,y,[deleted],\n4,/r/x/4,2024-01-04 00:00:00 UTC,0.0.0.0,gardening,0,x,y,\"Still here, with a comma\",\n"
+   }
+  ],
+  "expect": {
+   "detected_source": "reddit",
+   "records": [
+    [
+     "Still here, with a comma",
+     "comment"
+    ]
+   ],
+   "when": [
+    1704326400
+   ]
+  }
+ },
+ {
+  "name": "reddit: YouTube's comments.csv is refused clearly",
+  "files": [
+   {
+    "name": "comments.csv",
+    "text": "Comment ID,Channel ID,Comment Create Timestamp,Price,Parent Comment ID,Video ID,Comment Text\n1,c,2024-01-01T00:00:00Z,0,,v,hello\n"
+   }
+  ],
+  "expect_error": "YouTube Takeout"
+ },
+ {
+  "name": "amazon: newer Your Amazon Orders/Order History.csv",
+  "files": [
+   {
+    "name": "Order History.csv",
+    "text": "﻿ASIN,Billing Address,Carrier Name & Tracking Number,Currency,Order Date,Order ID,Order Status,Product Name,Website\nB000000000,Not Available,Not Available,USD,2024-03-01T18:22:31Z,112-1,Closed,Garden Trowel,Amazon.com\n"
+   }
+  ],
+  "expect": {
+   "detected_source": "amazon",
+   "records": [
+    [
+     "Garden Trowel",
+     "order"
+    ]
+   ],
+   "when": [
+    1709317351
+   ]
+  }
+ }
+]

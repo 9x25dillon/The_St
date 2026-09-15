@@ -3,8 +3,9 @@
 The Saint -- Amazon source adapter.
 
 Meets Amazon's "Request My Data" export (amazon.com/gp/privacycentral/dsar), specifically
-the retail order history CSV (typically named Retail.OrderHistory.1.csv, sometimes split
-across several numbered files). Column headers are matched by regex rather than hard-coded
+the retail order history CSV -- Retail.OrderHistory.1.csv in older exports (sometimes split
+across numbered files), "Your Amazon Orders/Order History.csv" in newer ones (checked against
+a published 2024-25 sample, 2026-09: same Product Name / ISO-8601 Order Date columns). Column headers are matched by regex rather than hard-coded
 names, since Amazon's export headers have varied across versions -- same "the schema
 drifts, so scan rather than hard-code" reasoning reddit.py gives. A file is classified as
 order history by its own header shape (a product-name-like column present), not by

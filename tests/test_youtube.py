@@ -26,6 +26,19 @@ class YouTubeTests(unittest.TestCase):
         self.assertEqual(records[0].when, parse_timestamp("2024-01-01T00:00:00Z"))
         self.assertEqual(records[1].detail, "https://www.youtube.com/watch?v=abc")
 
+    def test_google_ads_are_kept_apart_and_bare_links_skipped(self):
+        blob = [
+            {"header": "YouTube", "title": "Watched Spring Seed Sale", "titleUrl": "https://www.youtube.com/watch?v=ad1",
+             "time": "2024-01-01T00:00:00.123Z", "products": ["YouTube"],
+             "details": [{"name": "From Google Ads"}], "activityControls": ["Web & App Activity"]},
+            {"header": "YouTube", "title": "Watched https://www.youtube.com/watch?v=gone",
+             "titleUrl": "https://www.youtube.com/watch?v=gone", "time": "2024-01-01T00:00:00.123Z"},
+            {"header": "YouTube", "title": "Watched Composting basics", "time": "2024-01-02T00:00:00.456Z",
+             "subtitles": [{"name": "A Channel", "url": "https://www.youtube.com/channel/x"}]},
+        ]
+        self.assertEqual([(r.text, r.source) for r in load_blobs([blob])],
+                         [("Spring Seed Sale", "ad"), ("Composting basics", "watch")])
+
     def test_watch_and_search_files_combine_in_either_order(self):
         watch = [{"title": "Watched A quiet garden tour", "time": "2024-01-01T00:00:00Z"}]
         search = [{"title": "Searched for quiet gardens", "time": "2024-01-02T00:00:00Z"}]

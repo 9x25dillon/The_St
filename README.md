@@ -44,32 +44,40 @@ rather than guessing wrong.
 - **Personal notes & journal:** select `.md`, `.markdown`, or `.txt` files. Paragraphs
   become passages with their filename and section heading. YAML front matter and
   fenced code are excluded. Long paragraphs split into 120-word chunks. Notes are
-  limited to 1 MB each, 500 selected files, 8 MB per request, and 5,000 passages.
-- **TikTok:** select JSON export files. Expressed text, watch timestamps, and assigned
-  interest labels remain separate. Watch links are never fetched. Schema matching
-  is heuristic; missing streams may need an adapter adjustment for your export.
+  limited to 1 MB each.
+- **TikTok:** select `user_data.json` / `user_data_tiktok.json`. Searches, hashtags, comments,
+  and captions on your own posts are expressed text; only the Watch History list counts as
+  watch timestamps (likes, favorites, and shares share its shape but aren't watches); ad
+  interest labels come from `AdInterestCategories`. Watch links are never fetched. The
+  interests you picked yourself in Settings are not treated as assigned labels.
 - **YouTube:** a Google Takeout export (`watch-history.json` / `search-history.json`).
-  Search queries and watched video titles are kept separate; Takeout gives real
-  titles, so watched entries are embeddable text, unlike TikTok's bare watch links.
-  No assigned ad-interest categories in a standard Takeout export.
+  Search queries, watched video titles, and ads YouTube played (Takeout marks them "From
+  Google Ads") are kept separate. Choose JSON as the history format in Takeout; the HTML
+  version is recognized and refused with instructions. No assigned ad-interest
+  categories in a standard Takeout export.
 - **Instagram:** a Meta "Download your information" JSON export. Assigned topics
-  (`your_topics.json`) and search history are kept separate, matched by field name
-  inside Meta's `string_map_data` wrapper rather than by filename. Ad/post view
-  history isn't parsed for v1 — a volume signal, not text you wrote.
-- **X / Twitter:** an X archive export (`.js` files under `data/`). The
-  `window.YTD.<stream>.part0 = ...` wrapper is stripped automatically. Search
-  queries, your own post text, and assigned interest topics are kept separate.
-  Classic tweet timestamps aren't ISO-8601 and are left blank rather than guessed.
-- **Spotify:** an extended streaming history export
-  (`Streaming_History_Audio_*.json`). A real limitation, stated plainly: streaming
-  history can't tell a self-chosen play apart from one you clicked out of a
-  recommendation. No assigned-category stream in the export.
+  (`recommended_topics.json`, formerly `your_topics.json`) and keyword searches
+  (`word_or_phrase_searches.json`) are kept separate. Exports in any account language work,
+  and Meta's garbled accents and emoji are repaired. Profile searches (other people's
+  usernames) and ad/post view history aren't parsed.
+- **X / Twitter:** an X archive export (`.js` files under `data/`). Your posts
+  (`tweets.js`, with retweets kept apart as reposts), liked posts (`like.js`, someone
+  else's words), saved searches (`saved-search.js` — the archive has no full search
+  history), and assigned interests and shows (`personalization.js`) are kept separate.
+- **Spotify:** extended streaming history (`Streaming_History_Audio_*.json`, about
+  12.8 MB per file) and/or account data (`StreamingHistory_music_*.json`,
+  `StreamingHistory_podcast_*.json`, `SearchQueries.json`, `Inferences.json`). Tracks,
+  podcasts, audiobooks, your searches, and Spotify's inferred segments for you are kept
+  separate. Plays under 30 seconds are treated as skips and left out. A real limitation,
+  stated plainly: streaming history can't tell a self-chosen play apart from one you let
+  run from a recommendation.
 - **Reddit:** a GDPR data export's `posts.csv` / `comments.csv`. Classified by each
-  file's own header shape, not filename. Saved posts and vote history aren't parsed
-  for v1.
-- **Amazon:** a "Request My Data" order-history CSV
-  (`Retail.OrderHistory.*.csv`). Repeat purchases of the same product collapse into
-  one entry. Search history isn't always included in the export and isn't parsed.
+  file's own header shape, not filename; `[deleted]` / `[removed]` placeholders are
+  dropped. Saved posts and vote history aren't parsed. (Google Takeout's YouTube
+  `comments.csv` has the same name; it's recognized and refused rather than misread.)
+- **Amazon:** a "Request My Data" order-history CSV (`Your Amazon Orders/Order
+  History.csv`, or `Retail.OrderHistory.*.csv` in older exports). Repeat purchases of
+  the same product collapse into one entry. Search history isn't parsed.
 - **Device screen time:** a `usage.json` file of `{"app", "minutes", "date"}` rows —
   there's no universal export for this, so build one yourself from whatever usage
   view your device offers. Represented as short text ("Instagram: 47 minutes") so it
@@ -82,10 +90,25 @@ rather than guessing wrong.
 
 Each import **adds to** the current session rather than replacing it — import notes,
 then a TikTok export, then a YouTube export, and they sit in one combined view (a
-"sources in this session" list shows what's been added, and how much). **Clear
-session** is still there for a full reset. Search and **Show more passages** let you
-explore the source text across every imported source. Word counts are lexical counts,
-not inferred themes.
+"sources in this session" list shows what's been added, and how much). Importing
+something that's already in the session adds nothing, and a newer export that overlaps
+an older one adds only what's new. **Clear session** is still there for a full reset.
+
+Each file can be up to 32 MB (16 MB on Android); large selections are sent one part at a
+time. A session holds up to 5,000 passages. When a source brings more than fits, the app
+keeps its most recent entries — regardless of the order its files arrive in — and says
+how many older ones were left out. Passages from other sources are never pushed out.
+
+Search, **Show more passages**, and filter chips let you explore the source text across
+every imported source: filter by source, and once a semantic map exists, by island or by
+signal/noise. Chip counts update with your search and other filters, and the map fades
+passages that don't match. Word counts are lexical counts, not inferred themes.
+
+The adapters were checked in September 2026 against real published export samples,
+official field documentation (X's archive README), and the UChicago DSAR export schemas.
+Whether TikTok's ad-interest labels are separated by `|` or `,` is still unconfirmed:
+every real sample seen had that field empty. Your own export is still the best test — run
+the matching `--inspect` command below and compare the counts with what you expect.
 
 To inspect a whole notes folder from the command line (including Obsidian Markdown):
 
@@ -174,7 +197,9 @@ node tests/browser_smoke.mjs  # optional Chromium check; start the app first
 ```
 
 Tests cover every adapter's parsing (notes, TikTok, YouTube, Instagram, X/Twitter,
-Spotify, Reddit, Amazon, device usage), auto-detect routing, combined-session imports,
+Spotify, Reddit, Amazon, device usage), shared parsing cases that the Android smoke test
+also runs on a device (`tests/parity_cases.json`), auto-detect routing, combined-session
+imports, duplicate imports, newest-first trimming,
 SQLite WAL reads, local HTTP import/clear flows, cross-origin rejection, stale analysis
 results, and the profile-health scoring math. They use synthetic data and temporary
 files, never your actual browser history, notes, or real export files.

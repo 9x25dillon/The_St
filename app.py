@@ -26,7 +26,8 @@ from usage import load_blobs as load_usage_blobs
 from x import load_files as load_x_files
 
 ASSETS = Path(__file__).parent / 'web'
-MAX_REQUEST = 8_000_000
+MAX_REQUEST = 64_000_000  # one file (up to 32 MB) per request, with room for JSON escaping; real Spotify history files run ~12.8 MB
+MAX_IMPORT_RECORDS = 100_000  # parsing safety bound; the session itself keeps MAX_RECORDS
 STOP = set('the and that this with from have was were are for but not you your my our had has will into just about they them then when what some more been very can'.split())
 
 # Auto-detect: filename patterns for the standard export tools ship, checked in order.
@@ -34,11 +35,11 @@ STOP = set('the and that this with from have was were are for but not you your m
 # never guesses from content alone, only from names these tools consistently use.
 _SOURCE_FILENAME_PATTERNS = [
     (re.compile(r'\.(md|markdown|txt)$', re.I), 'notes'),
-    (re.compile(r'(watch-history|search-history)\.json$', re.I), 'youtube'),
-    (re.compile(r'your_topics|word_or_phrase_searches|ads_viewed|ads_and_topics', re.I), 'instagram'),
-    (re.compile(r'streaming_history_audio|streaminghistory', re.I), 'spotify'),
+    (re.compile(r'(watch-history|search-history)\.(json|html)$', re.I), 'youtube'),
+    (re.compile(r'your_topics|recommended_topics|word_or_phrase_searches|ads_viewed|ads_and_topics', re.I), 'instagram'),
+    (re.compile(r'streaming_history_audio|streaminghistory|searchqueries\.json$|inferences\.json$', re.I), 'spotify'),
     (re.compile(r'posts\.csv$|comments\.csv$', re.I), 'reddit'),
-    (re.compile(r'retail\.orderhistory', re.I), 'amazon'),
+    (re.compile(r'retail\.orderhistory|order history\.csv$', re.I), 'amazon'),
     (re.compile(r'usage|screen.?time', re.I), 'usage'),
     (re.compile(r'user_data\.json$|tiktok', re.I), 'tiktok'),
     (re.compile(r'\.js$', re.I), 'x'),
@@ -70,33 +71,95 @@ def word_terms(record_dicts):
     return words.most_common(16)
 
 
-def summarize(records, categories=(), watches=0):
+def summarize(records, categories=(), watch_times=()):
     record_dicts = [asdict(r) for r in records]
-    return {'records': record_dicts, 'categories': list(categories), 'watches': watches,
-            'terms': word_terms(record_dicts), 'map': None, 'sources': []}
+    # watch_times stays server-side (see PRIVATE_SNAPSHOT_KEYS); clients only need the count.
+    return {'records': record_dicts, 'categories': sorted(set(categories)), 'watches': len(watch_times),
+            'watch_times': list(watch_times), 'terms': word_terms(record_dicts), 'map': None, 'sources': []}
+
+
+PRIVATE_SNAPSHOT_KEYS = {'watch_times'}
+
+
+# Sources whose entries are told apart by date as well as text: a usage row is one app on one
+# day, so "Instagram: 47 minutes" on two days is two entries.
+DATED_IDENTITY_SOURCES = {'usage'}
+
+
+def _record_key(record):
+    # Every other adapter already collapses repeats of the same text within an import and keeps
+    # the first time it saw them; matching that here means the same song arriving in two
+    # Spotify history files (sent as separate imports) is still one passage.
+    when = record['when'] if record.get('origin') in DATED_IDENTITY_SOURCES else None
+    return record.get('origin'), record['source'], record['text'].lower(), record['detail'], when
+
+
+def _not_already_present(existing, incoming, key):
+    """Incoming items not already covered by existing, compared as multisets: an item that
+    appears n times in the session absorbs up to n copies from an import. Re-importing the
+    same export adds nothing, an overlapping newer export adds only what's new, and a
+    passage that legitimately repeats within one file keeps its repeats."""
+    remaining = Counter(key(item) for item in existing)
+    added = []
+    for item in incoming:
+        k = key(item)
+        if remaining[k]:
+            remaining[k] -= 1
+        else:
+            added.append(item)
+    return added
+
+
+def _newest(records, count):
+    """The `count` most recent records, in their original order. Undated records rank after
+    dated ones and keep file order among themselves."""
+    ranked = sorted(range(len(records)), key=lambda i: (records[i]['when'] is not None, records[i]['when'] or 0),
+                    reverse=True)
+    return [records[i] for i in sorted(ranked[:count])]
 
 
 def merge_snapshot(existing, incoming, source_name):
-    records = existing['records'] + incoming['records']
+    """Combine an import into the session. Returns (snapshot, added, skipped, dropped): skipped
+    entries were already in the session; dropped counts this source's older passages (new or
+    already present) left out to stay under MAX_RECORDS. When the import brings nothing new,
+    snapshot is `existing` itself, so a finished map is kept rather than discarded and rebuilt."""
+    tagged = [{**record, 'origin': source_name} for record in incoming['records']]
+    new_records = _not_already_present(existing['records'], tagged, _record_key)
+    skipped = len(tagged) - len(new_records)
+    records = existing['records'] + new_records
+    dropped = 0
     if len(records) > MAX_RECORDS:
-        raise ValueError('Combined session exceeds 5,000 passages. Clear the session or import fewer files.')
+        # Trim this source's passages -- already-present and incoming together -- to the newest
+        # that fit, so a multi-file export lands on the same result in any file order. Other
+        # sources' passages are never evicted by this import.
+        same = [r for r in records if r.get('origin') == source_name]
+        capacity = max(MAX_RECORDS - (len(records) - len(same)), 0)
+        kept = {id(r) for r in _newest(same, capacity)}
+        dropped = len(same) - len(kept)
+        records = [r for r in records if r.get('origin') != source_name or id(r) in kept]
+        new_records = [r for r in new_records if id(r) in kept]
+    new_watches = _not_already_present(existing['watch_times'], incoming['watch_times'], lambda t: t)
+    categories = sorted(set(existing['categories']) | set(incoming['categories']))
+    added = len(new_records)
+    if not new_records and not new_watches and len(categories) == len(existing['categories']):
+        return existing, 0, skipped, dropped
     sources = [dict(entry) for entry in existing.get('sources', [])]
-    added = len(incoming['records'])
+    count = sum(1 for r in records if r.get('origin') == source_name)
     for entry in sources:
         if entry['source'] == source_name:
-            entry['count'] += added
+            entry['count'] = count
             break
     else:
-        sources.append({'source': source_name, 'count': added})
-    return {'records': records,
-            'categories': existing['categories'] + incoming['categories'],
-            'watches': existing['watches'] + incoming['watches'],
-            'terms': word_terms(records), 'map': None, 'sources': sources}
+        sources.append({'source': source_name, 'count': count})
+    watch_times = existing['watch_times'] + new_watches
+    return ({'records': records, 'categories': categories, 'watches': len(watch_times),
+             'watch_times': watch_times, 'terms': word_terms(records), 'map': None, 'sources': sources},
+            added, skipped, dropped)
 
 
 def import_data(data):
     source = data.get('source')
-    categories, watches = [], 0
+    categories, watch_times = [], []
     if source == 'notes':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
@@ -106,8 +169,8 @@ def import_data(data):
             if not isinstance(file, dict) or not isinstance(file.get('name'), str) or not isinstance(file.get('text'), str):
                 raise ValueError('Invalid note file.')
             records.extend(parse_note(file['name'], file['text']))
-            if len(records) > MAX_RECORDS:
-                raise ValueError('Choose fewer notes (maximum 5,000 passages).')
+            if len(records) > MAX_IMPORT_RECORDS:
+                raise ValueError('Choose fewer notes at once.')
     elif source == 'tiktok':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
@@ -117,16 +180,19 @@ def import_data(data):
         except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise ValueError('Each TikTok file must contain valid JSON.') from exc
         export = load_blobs(blobs)
-        records, categories, watches = export.expressed, export.ad_categories, len(export.watch_times)
+        records, categories, watch_times = export.expressed, export.ad_categories, export.watch_times
     elif source == 'youtube':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
             raise ValueError('Choose YouTube Takeout JSON export files.')
+        if any(isinstance(f, dict) and isinstance(f.get('text'), str) and f['text'].lstrip().startswith('<') for f in files):
+            raise ValueError('This is the HTML version of your YouTube history. Export it again from '
+                             'Google Takeout with the history format set to JSON.')
         try:
             blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
         except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise ValueError('Each YouTube file must contain valid JSON.') from exc
-        records, categories, watches = load_youtube_blobs(blobs), [], 0
+        records = load_youtube_blobs(blobs)
     elif source == 'instagram':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
@@ -135,7 +201,7 @@ def import_data(data):
             blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
         except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise ValueError('Each Instagram file must contain valid JSON.') from exc
-        records, categories, watches = (*load_instagram_blobs(blobs), 0)
+        records, categories = load_instagram_blobs(blobs)
     elif source == 'spotify':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
@@ -144,17 +210,17 @@ def import_data(data):
             blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
         except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise ValueError('Each Spotify file must contain valid JSON.') from exc
-        records, categories, watches = load_spotify_blobs(blobs), [], 0
+        records, categories = load_spotify_blobs(blobs)
     elif source == 'reddit':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
             raise ValueError('Choose Reddit posts.csv / comments.csv export files.')
-        records, categories, watches = load_reddit_rows(files), [], 0
+        records = load_reddit_rows(files)
     elif source == 'amazon':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
             raise ValueError('Choose an Amazon order history CSV file.')
-        records, categories, watches = load_amazon_rows(files), [], 0
+        records = load_amazon_rows(files)
     elif source == 'usage':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
@@ -163,12 +229,12 @@ def import_data(data):
             blobs = [json.loads(f['text'].lstrip('﻿')) for f in files]
         except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise ValueError('Each usage file must contain valid JSON.') from exc
-        records, categories, watches = load_usage_blobs(blobs), [], 0
+        records = load_usage_blobs(blobs)
     elif source == 'x':
         files = data.get('files')
         if not isinstance(files, list) or not files or len(files) > 500:
             raise ValueError('Choose X/Twitter export .js files.')
-        records, categories, watches = (*load_x_files(files), 0)
+        records, categories = load_x_files(files)
     elif source in ('firefox', 'chrome'):
         records = (read_firefox if source == 'firefox' else read_chrome)()
     elif source == 'demo':
@@ -181,11 +247,11 @@ def import_data(data):
                    for title, text in themes for i in range(12)]
     else:
         raise ValueError('Unknown source.')
-    if not records and not categories and not watches:
+    if not records and not categories and not watch_times:
         raise ValueError('No usable entries found in this source.')
-    if len(records) > MAX_RECORDS:
-        raise ValueError('Source exceeds 5,000 passages. Choose a smaller export.')
-    return summarize(records, categories, watches)
+    if len(records) > MAX_IMPORT_RECORDS:
+        raise ValueError('This file has more entries than the app can read at once. Choose a smaller export file.')
+    return summarize(records, categories, watch_times)
 
 
 def semantic_map(snapshot):
@@ -300,7 +366,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == '/api/state':
             with self.server.lock:
-                self.reply(200, {'token': self.server.token, **self.server.snapshot,
+                public = {k: v for k, v in self.server.snapshot.items() if k not in PRIVATE_SNAPSHOT_KEYS}
+                self.reply(200, {'token': self.server.token, **public,
                                  'job': self.server.job,
                                  'semantic_installed': all(importlib.util.find_spec(m) is not None
                                      for m in ('numpy', 'umap', 'hdbscan', 'sentence_transformers'))})
@@ -320,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_REQUEST:
-                return self.reply(413, {'error': 'Choose a smaller import (maximum 8 MB). '})
+                return self.reply(413, {'error': 'Choose a smaller file (maximum 32 MB per file).'})
             if self.headers.get('Content-Type') != 'application/json':
                 return self.reply(415, {'error': 'JSON required.'})
             data = json.loads(self.rfile.read(length))
@@ -328,14 +395,21 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Expected a JSON object.')
             if self.path == '/api/import':
                 source = data.get('source')
-                resolved = detect_source(data.get('files')) if source == 'auto' else source
+                # The page sends large selections one file per request, with every selected
+                # name in `names`, so auto-detect still sees (and checks) the whole selection.
+                names = data.get('names')
+                selection = [{'name': n} for n in names if isinstance(n, str)] if isinstance(names, list) else data.get('files')
+                resolved = detect_source(selection) if source == 'auto' else source
                 incoming = import_data({**data, 'source': resolved})
                 with self.server.lock:
-                    merged = merge_snapshot(self.server.snapshot, incoming, resolved)
-                    self.server.generation += 1
-                    self.server.snapshot = merged
-                    self.server.job = {'status': 'idle'}
-                self.reply(200, {'ok': True, 'detected_source': resolved})
+                    merged, added, skipped, dropped = merge_snapshot(self.server.snapshot, incoming, resolved)
+                    changed = merged is not self.server.snapshot
+                    if changed:
+                        self.server.generation += 1
+                        self.server.snapshot = merged
+                        self.server.job = {'status': 'idle'}
+                self.reply(200, {'ok': True, 'detected_source': resolved, 'changed': changed,
+                                 'added': added, 'skipped': skipped, 'dropped': dropped})
             elif self.path == '/api/clear':
                 with self.server.lock:
                     self.server.generation += 1

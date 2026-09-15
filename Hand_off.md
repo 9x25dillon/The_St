@@ -176,9 +176,20 @@ Messenger-export fix); Spotify's `searchTime` "[UTC]" suffix (stripped defensive
   real exports, dedupe imports, add explore filters") on `origin/main`, followed by a
   hand-off update commit. Verify with `git log --oneline -3` rather than trusting this
   file.
-- **Pushed after the release**: `1f8c89f` ("Add island summaries, score explanations, and
-  recalibrate the signal score") on `origin/main`, covering the island summaries, the
-  usefulness work, and the scoring recalibration. The released `v0.2.0` APK predates it.
+- **Pushed after the v0.2.0 release**: `1f8c89f` ("Add island summaries, score explanations,
+  and recalibrate the signal score"), then `1416419` (version bump), all on `origin/main`.
+- **Released `v0.2.1`** (prerelease, debug-signed):
+  https://github.com/9x25dillon/The_St/releases/tag/v0.2.1 — tag on full SHA
+  `1416419a4b56c1ba0cfcbd621ef676eb8660a079` (`versionCode 3` / `versionName 0.2.1`).
+  Assets: `the-saint-0.2.1-debug.apk` (49,810 bytes, SHA-256
+  `e41f0e1dbf4706ca3834cdc16ec239ec802f997a1ff400611a347d23c5cc5a63`) and `SHA256SUMS.txt`;
+  same signing certificate as v0.1.0/v0.2.0. Verified: fresh install (uninstall first, not an
+  update) on the Pixel 10a, on-device smoke test passed, a real device screenshot confirmed
+  the launch screen, and the downloaded asset is byte-identical to the tested build. Cut
+  because the user plans to install it on their own personal phone (the Pixel here is not
+  theirs) — the notes therefore cover phone-side install steps and what the app does with
+  their data. Android-visible changes since v0.2.0 are only the cleaned word counts and the
+  session mix bar.
 - **Released `v0.2.0`** (prerelease, debug-signed):
   https://github.com/9x25dillon/The_St/releases/tag/v0.2.0 — tag on full SHA
   `36949149ace04a13a8405e8879e201b082929a89` (the `versionCode 2` / `versionName 0.2.0`

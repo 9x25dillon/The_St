@@ -80,14 +80,17 @@ hypothesis is that their data can resolve into recognizable behavioral themes.
 - Workspace: `/home/kill/The_St`
 - Repository: https://github.com/9x25dillon/The_St
 - Branch: `main`
-- Last published source commit (prior session): `8432188a78d9fa42c8afeca80b55269290d286d4`
-- Last GitHub prerelease (prior session): https://github.com/9x25dillon/The_St/releases/tag/v0.1.0
-- **This session's work is committed locally but not yet pushed or released** — check
-  `git status`/`git log` at the start of the next session; do not assume it matches
-  the state described here without verifying. If a new Android release is warranted,
-  bump `versionCode`/`versionName` in `android/AndroidManifest.xml` first (still at
-  `0.1.0`/`1` as of this writing) and publish against a full commit SHA, per the
-  prior session's lesson (an abbreviated SHA was rejected once).
+- **This session's commit is pushed**: `c686e82` ("Add six ingestion adapters, combined
+  sessions, auto-detect, and local profile-health scoring"), pushed to `origin/main`.
+  Verify with `git log --oneline -3` at the start of the next session rather than
+  trusting this file — it can drift.
+- Last GitHub *release* (prerelease `v0.1.0`, still current as of this writing — this
+  session did NOT cut a new APK release): https://github.com/9x25dillon/The_St/releases/tag/v0.1.0.
+  The APK at that release tag is now behind the source in `main` (it doesn't include
+  any of this session's Android-side adapter work). If a new Android release is
+  warranted, bump `versionCode`/`versionName` in `android/AndroidManifest.xml` first
+  (still at `0.1.0`/`1` as of this writing) and publish against the full commit SHA
+  above, per the prior session's lesson (an abbreviated SHA was rejected once).
 
 ## Implementation map
 
@@ -220,6 +223,72 @@ they were hit. Don't chase them if seen again; just retry once or twice.
    have been rejected by the release command before).
 5. Keep this hand-off current: state what's verified vs. only proposed, and whether
    new work has been committed/pushed/published.
+
+## Session retrospective and prompting lessons
+
+Three opportunities for the assistant:
+
+1. Reason through concurrency before implementing, not just after a test catches it.
+   The first version of auto-analyze routed through the same `action()`/`busy` mutex
+   the manual button uses. That's fine for an explicit click but wrong for an
+   invisible background trigger: a new import landing while a PREVIOUS import's
+   auto-triggered analysis was still finishing produced a 409 that, combined with a
+   stale client-side `job.status`, caused an immediate synchronous retry loop that
+   locked out the Clear button. `browser_smoke.mjs` caught it, but the race was
+   foreseeable from the design alone — worth a beat of "what happens if this fires
+   twice, or fires while another one is in flight" before writing code that touches
+   shared mutable state, not just after.
+2. Validate a nontrivial formula empirically before committing it to code. The first
+   `homogenization_index` (a nearest-neighbor / pairwise-distance ratio) had the sign
+   backwards: it scored healthy, well-separated multi-cluster data as MORE
+   homogenized than a single undifferentiated blob. A two-minute numpy check would
+   have caught this before it was ever written into `signal_score.py` — it did catch
+   it, but only because the check happened to run before shipping, not as standard
+   practice for every new formula.
+3. Don't schedule polling wakeups for background work the harness already tracks.
+   Early in the session, `ScheduleWakeup` was used a couple of times to check on the
+   two Explore agents, which arrive as automatic task notifications regardless — a
+   small, self-corrected inefficiency, but worth naming so it doesn't recur.
+
+Three opportunities for the user, if named at the outset:
+
+1. The opening request ("add more data ingestion pipelines and slightly automate the
+   user interface and functions... whatever the digital diet of the user's device
+   that can affect the algorithms") named no specific platforms and no concrete
+   definition of "automate." That took three rounds of clarifying questions (which
+   sources, what automation means, what the math-engine term meant, which platforms)
+   before implementation could start. A list of platforms and a sentence on what
+   "automate" should feel like would have collapsed that to one round, or zero.
+2. "a mathmatical typescript engine would be useful" read as a technology request
+   (TypeScript) but meant something else entirely — a scoring framework you'd
+   already drafted in full. Leading with the framework's actual content, or a
+   plainer name like "a scoring/weighting layer for events," instead of a tool name
+   that doesn't appear anywhere in this codebase, would have skipped a full
+   clarification round.
+3. Two requirements (Amazon and Reddit as sources; the scoring framework itself)
+   arrived as asides tacked onto answers to other questions rather than being part
+   of the original ask. Each addition is cheap to send but costs a re-scoping pass
+   mid-flight on this end. Bundling everything you want — even roughly — into the
+   first message lets the full scope get planned once.
+
+Vocabulary (new this session, in addition to Scope/Provenance below):
+
+- **Spec** (specification): a precise, testable description of desired behavior —
+  inputs, outputs, edge cases — rather than a name for something. "Spec it, don't
+  name it" would have turned "a mathematical typescript engine" straight into the
+  actual formulas, skipping a clarification round. This one helps the assistant
+  directly too: hearing "here's the spec" is a clear signal to implement exactly
+  what follows rather than infer intent from a name or a vibe.
+- **Acceptance criteria**: the observable conditions that prove a feature is done
+  (e.g. "importing a YouTube file produces a search record and a watch record with
+  correct timestamps"). Stating these up front gives a concrete target to build
+  against and a fast way to check the result without reading all the code.
+
+Reusable prompt:
+
+"Here's the spec for [feature]: [inputs/outputs/edge cases]. Scope this to [platforms/
+files/boundary]. Done means [acceptance criteria]. Build it, verify with [which
+tests/devices], and [commit/push/report] when it passes."
 
 ## Vocabulary
 

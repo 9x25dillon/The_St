@@ -23,6 +23,7 @@ from app.config import Settings
 from app.consent.kernel import PurposeViolationError
 from app.consent.middleware import PurposeGuardMiddleware
 from app.consent.router import router as consent_router
+from app.db import create_sqlite_schema
 from app.errors import ApiError, error_response
 from app.export.router import router as export_router
 from app.profiles.router import router as profiles_router
@@ -40,6 +41,9 @@ RATE_LIMITED_PATHS = ("/consent/authorize",)
 def create_app(services: Services | None = None) -> FastAPI:
     services = services or build_services(Settings())
     production = services.settings.env == "production"
+    if services.engine.dialect.name == "sqlite":
+        # Development convenience; PostgreSQL schemas come only from Alembic.
+        create_sqlite_schema(services.engine)
     app = FastAPI(
         title="Remembrance Consent Kernel",
         version="1.0.0",

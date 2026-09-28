@@ -5,7 +5,9 @@ either commits every write together with its audit event or none of them.
 """
 from __future__ import annotations
 
-from sqlalchemy import Engine, MetaData, create_engine, event
+from pathlib import Path
+
+from sqlalchemy import Engine, MetaData, create_engine, event, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -39,6 +41,9 @@ SQLITE_GUARDS = (
 def make_engine(url: str, *, echo: bool = False) -> Engine:
     if url.startswith("sqlite"):
         in_memory = url in ("sqlite://", "sqlite+pysqlite://") or ":memory:" in url
+        database = make_url(url).database
+        if not in_memory and database:
+            Path(database).parent.mkdir(parents=True, exist_ok=True)
         engine = create_engine(
             url,
             echo=echo,

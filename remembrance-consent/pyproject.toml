@@ -45,6 +45,8 @@ markers = [
 ]
 filterwarnings = [
     "error::sqlalchemy.exc.SAWarning",
+    # Starlette 1.7+ nudges TestClient users toward httpx2; httpx still works.
+    "ignore:Using `httpx` with `starlette.testclient`",
 ]
 
 [tool.coverage.run]

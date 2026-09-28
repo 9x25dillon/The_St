@@ -27,7 +27,7 @@ class TrackedClient(FlaskClient):
             response.close()
 
 
-class MemorialTests(unittest.TestCase):
+class MemorialTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.app = create_app({'TESTING': True, 'DATA_DIR': Path(self.tmp.name), 'SECRET_KEY': 'testing-only-secret-key-not-for-real-use', 'PUBLIC_URL': 'http://localhost'})
@@ -74,6 +74,7 @@ class MemorialTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         return self.query('SELECT * FROM media ORDER BY rowid DESC')[0]['id']
 
+class MemorialTests(MemorialTestCase):
     def test_account_and_private_defaults(self):
         r = self.post(self.owner, '/memorials/new', name='Private Person', authority='self', authority_name='A Person', consent='yes')
         mid = r.location.split('/')[2]

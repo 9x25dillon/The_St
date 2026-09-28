@@ -24,7 +24,7 @@ try{
   ws.onmessage=e=>{const msg=JSON.parse(e.data);if(msg.method==='Runtime.exceptionThrown')errors.push(msg.params.exceptionDetails);if(pending.has(msg.id)){const [ok,no]=pending.get(msg.id);pending.delete(msg.id);msg.error?no(Error(msg.error.message)):ok(msg.result);}};
   const call=(method,params={})=>new Promise((ok,no)=>{const key=++id;pending.set(key,[ok,no]);ws.send(JSON.stringify({id:key,method,params}));});
   const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
-  const until=async expr=>{for(let i=0;i<100;i++){if(await evaluate(expr))return;await new Promise(r=>setTimeout(r,100));}throw Error(`Timed out: ${expr}; ${await evaluate('document.body.innerText')}`);};
+  const until=async expr=>{for(let i=0;i<100;i++){if(await evaluate(`Boolean(document.body) && (${expr})`))return;await new Promise(r=>setTimeout(r,100));}throw Error(`Timed out: ${expr}; ${await evaluate('document.body?.innerText')}`);};
   const go=async path=>{await call('Page.navigate',{url:env.PUBLIC_URL+path});await until(`document.readyState==='complete' && location.pathname===${JSON.stringify(path)}`);};
   const fill=async values=>evaluate(`(()=>{const values=${JSON.stringify(values)};for(const [name,value] of Object.entries(values)){const el=document.querySelector('[name="'+name+'"]');if(el.type==='checkbox')el.checked=value;else el.value=value;}return true;})()`);
   const screenshot=async file=>{const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});await writeFile(join(root,'dist',file),Buffer.from(r.data,'base64'));};
@@ -72,18 +72,50 @@ try{
   await go(base+'/plaque');
   assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Plaque mobile layout must not overflow');
   assert.equal(await evaluate("document.querySelector('.plaque img').naturalWidth>0"),true);
+  await go(base+'/consent');
+  assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Consent form must fit mobile');
+  await fill({signed_name:'Browser Tester',audience:'public',activation:'after_death',consent:true});
+  await evaluate('document.querySelector(".form-stack").requestSubmit()');
+  await until("document.body.innerText.includes('Waiting for review.')");
+  const grantId=await evaluate("document.querySelector('.consent-details code').textContent");
+  const anonymousStatus=()=>evaluate(`fetch(${JSON.stringify(base)},{credentials:'omit'}).then(r=>r.status)`);
+  assert.equal(await anonymousStatus(),404,'Pending review must hide the memorial');
+  const review=(...args)=>execFileSync(python,['-m','flask','--app','app','consent',...args,'--reviewer','browser-test','--reference','disposable-case'],{cwd:root,env});
+  review('verify',grantId);
+  await go(base+'/consent');
+  await until("document.body.innerText.includes('Held until after passing.')");
+  assert.equal(await anonymousStatus(),404,'A biography death date must not activate sharing');
+  review('confirm-death',base.split('/')[2],'--date','2024-01-02');
+  await go(base+'/consent');
+  await until("document.body.innerText.includes('Your grant allows sharing.')");
+  assert.equal(await anonymousStatus(),200,'Reviewed and confirmed grant should release the memorial');
+  assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Active consent view must fit mobile');
+  await screenshot('consent-mobile.png');
+  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  await screenshot('consent-desktop.png');
+  await evaluate("document.querySelector('form[action$=\"/revoke\"] button').click()");
+  await until("document.body.innerText.includes('Sharing is paused.')");
+  assert.equal(await anonymousStatus(),404,'Revocation must stop visitor access');
+  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await go('/install');
   await until("!!navigator.serviceWorker.controller");
   const cacheKeys=await evaluate("(async()=>{const paths=[];for(const key of await caches.keys()){const cache=await caches.open(key);for(const req of await cache.keys())paths.push(new URL(req.url).pathname);}return paths;})()");
   assert.ok(cacheKeys.flat().every(x=>x.startsWith('/static/')),'Private pages must never enter offline caches');
   await call('Network.enable');
   await call('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:0,uploadThroughput:0});
+  // Stop the disposable backend too, so the service worker cannot fetch through a separate network target.
+  await new Promise(resolve=>{server.once('exit',resolve);server.kill();});
   await call('Page.navigate',{url:env.PUBLIC_URL+'/dashboard'});
   await until("document.body.innerText.includes('A quiet pause.')");
   assert.deepEqual(errors,[],'No browser script errors');
-  console.log('PASS: desktop/mobile layouts, registration, memorial creation, timeline, tribute moderation, candle, QR, install shell, and offline privacy. Screenshots in remembrance/dist/.');
+  console.log('PASS: desktop/mobile layouts, registration, memorial creation, timeline, tribute moderation, candle, QR, consent review, after-passing release, revocation, install shell, and offline privacy. Screenshots in remembrance/dist/.');
+}catch(error){
+  console.error(error);
+  throw error;
 }finally{
-  ws?.close();chrome.kill();server.kill();
-  await Promise.all([new Promise(r=>chrome.once('exit',r)),new Promise(r=>server.once('exit',r))]);
-  await rm(tmp,{recursive:true,force:true});
+  ws?.close();
+  const stopped=[chrome,server].map(child=>child.exitCode!==null||child.signalCode!==null?Promise.resolve():new Promise(r=>child.once('exit',r)));
+  chrome.kill();server.kill();
+  await Promise.all(stopped);
+  await rm(tmp,{recursive:true,force:true,maxRetries:10,retryDelay:100});
 }

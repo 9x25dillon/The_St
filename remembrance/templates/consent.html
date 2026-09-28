@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block title %}Sharing consent — {{ m.name }} — Remembrance{% endblock %}
+{% block content %}
+<section class="reading section consent-page">
+  <a class="back-link" href="{{ url_for('manage', mid=m.id) }}">← Back to memorial care</a>
+  <p class="eyebrow">THEIR WISHES, HELD WITH CARE</p>
+  <h1>A say in what is shared.</h1>
+  <p class="lead">Record permission to share {{ m.name }}’s memorial, choose an audience, and decide when sharing may begin.</p>
+
+  <section class="panel consent-status" aria-labelledby="sharing-status">
+    <p class="eyebrow">SHARING STATUS</p>
+    {% if not control %}
+      <h2 id="sharing-status">Your visibility settings apply.</h2>
+      <p>Reviewed sharing adds an operator’s review before visitors can see this memorial. Recording your first grant pauses visitor access until its conditions are met.</p>
+    {% elif not grant %}
+      <h2 id="sharing-status">Sharing is paused.</h2>
+      <p>There is no current grant. You can continue caring for and exporting the memorial. Record a new grant below to request sharing again.</p>
+    {% elif decision.code == 'awaiting_review' %}
+      <h2 id="sharing-status">Waiting for review.</h2>
+      <p>Your grant is recorded. The operator needs to review your authority and the permission before sharing can begin.</p>
+    {% elif decision.code == 'awaiting_death_confirmation' %}
+      <h2 id="sharing-status">Held until after passing.</h2>
+      <p>Your grant has been reviewed. Visitors cannot see the memorial until the operator separately confirms the person’s passing. Editing the date on the life story does not release it.</p>
+    {% elif decision.allowed %}
+      <h2 id="sharing-status">Your grant allows sharing.</h2>
+      <p>The permitted audience is <strong>{{ 'granted family accounts' if grant.audience == 'family' else 'everyone with the link' }}</strong>. The memorial’s visibility and each memory’s visibility can further limit access.</p>
+      {% if m.archived or m.visibility == 'private' %}<p class="notice">This memorial is {{ 'archived' if m.archived else 'private' }}, so it is still hidden from visitors.</p>{% endif %}
+    {% else %}
+      <h2 id="sharing-status">Sharing is paused.</h2>
+      <p>The current grant does not allow sharing. Contact the operator to review it.</p>
+    {% endif %}
+    {% if control %}<p class="fineprint">Reviewed sharing stays enabled for this memorial. Changing visibility or restoring an archive cannot bypass a revoked or pending grant.</p>{% endif %}
+  </section>
+
+  {% if grant %}
+  <section class="panel" aria-labelledby="current-grant">
+    <p class="eyebrow">YOUR CURRENT GRANT</p>
+    <h2 id="current-grant">Permission, with clear limits.</h2>
+    <dl class="consent-details">
+      <dt>What it covers</dt><dd>Viewing this memorial and its current and future original recordings, photos, stories and tributes.</dd>
+      <dt>Audience</dt><dd>{{ 'Granted family accounts' if grant.audience == 'family' else 'Everyone with the link' }}</dd>
+      <dt>Release time</dt><dd>{{ 'After passing is confirmed' if grant.activation == 'after_death' else 'Once reviewed' }}</dd>
+      <dt>Recorded by</dt><dd>{{ grant.signed_name }}</dd>
+      <dt>Grant reference</dt><dd><code>{{ grant.id }}</code></dd>
+    </dl>
+    <details><summary>Your recorded declaration</summary><p>{{ grant.declaration_text }}</p></details>
+    {% if grant.status == 'pending' %}<p>Give this grant reference to the operator when arranging a review. Keep identity and estate documents out of the memorial’s uploads.</p>{% endif %}
+    {% if support_email %}<p><a href="mailto:{{ support_email }}">Contact the operator</a></p>{% endif %}
+    <hr>
+    <h3>Withdraw this permission</h3>
+    <p>Revoking pauses future visitor access to the memorial and its media. You retain owner access. A replacement grant needs a new review.</p>
+    <form method="post" action="{{ url_for('revoke_consent', mid=m.id, gid=grant.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button secondary">Revoke grant and pause sharing</button>
+    </form>
+  </section>
+  {% else %}
+  <section class="panel" aria-labelledby="record-grant">
+    <p class="eyebrow">A RECORDED CHOICE</p>
+    <h2 id="record-grant">{{ 'Record a new grant.' if control else 'Enable reviewed sharing.' }}</h2>
+    <form method="post" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Who may visit?
+        <select name="audience" required>
+          <option value="family">Family — only accounts I grant access to</option>
+          <option value="public">Everyone with the link</option>
+        </select>
+      </label>
+      <label>When may sharing begin?
+        <select name="activation" required>
+          <option value="now">Once the operator reviews this grant</option>
+          <option value="after_death">After review and confirmation of passing</option>
+        </select>
+      </label>
+      <label>Your full name<input name="signed_name" maxlength="120" autocomplete="name" required></label>
+      <p class="fineprint">{{ declaration }}</p>
+      <label class="check"><input type="checkbox" name="consent" value="yes" required><span>I agree to this declaration, have authority to record this permission, and have respected the person’s known wishes. I understand that visitor access pauses until this grant is reviewed and its release conditions are met.</span></label>
+      <button class="button">Record grant and pause sharing</button>
+    </form>
+  </section>
+  {% endif %}
+
+  <p class="fineprint">Operator review records a human decision; the app does not independently verify estate documents. Revocation cannot recall copies already downloaded or stop a response already being delivered.</p>
+  {% if grants %}
+  <section class="panel" aria-labelledby="consent-history">
+    <p class="eyebrow">A RECORD OF YOUR CHOICES</p>
+    <h2 id="consent-history">Consent history.</h2>
+    <div class="item-list">{% for item in grants %}<article><span class="badge">{{ item.status }}</span><p>{{ item.created_at[:16].replace('T', ' ') }} UTC · {{ item.audience|capitalize }} · {{ 'After passing' if item.activation == 'after_death' else 'After review' }}</p><small>Grant {{ item.id }}</small></article>{% endfor %}</div>
+    <details><summary>Recent consent activity</summary><div class="audit-list">{% for item in history %}<p><time>{{ item.created_at[:16].replace('T', ' ') }} UTC</time><span>{{ item.event_type.replace('_', ' ') }}</span></p>{% endfor %}</div></details>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

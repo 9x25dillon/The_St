@@ -23,7 +23,13 @@ import qrcode
 import qrcode.image.svg
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.exceptions import SecurityError
+from werkzeug.exceptions import BadRequest, SecurityError
+
+if __package__:
+    from . import consent, database
+else:
+    import consent
+    import database
 
 ROOT = Path(__file__).resolve().parent
 Image.MAX_IMAGE_PIXELS = 30_000_000
@@ -90,8 +96,7 @@ def create_app(config=None):
             conn.close()
 
     with app.app_context():
-        db().executescript((ROOT / 'schema.sql').read_text())
-        db().commit()
+        database.initialize(db())
 
     def audit(mid, action, target=None):
         db().execute('INSERT INTO audit(memorial_id,actor_id,action,target_id,created) VALUES(?,?,?,?,?)',
@@ -180,7 +185,28 @@ def create_app(config=None):
             abort(403, 'Only the memorial owner can do this.')
         if role != 'owner' and (m['archived'] or m['visibility'] == 'private' or (m['visibility'] == 'family' and role != 'family')):
             abort(404)
+        if role != 'owner' and not sharing_allowed(mid, role):
+            abort(404)
         return m, role
+
+    def sharing_allowed(mid, role):
+        if not db().execute('SELECT 1 FROM consent_controls WHERE memorial_id=?', (mid,)).fetchone():
+            return True
+        return consent.authorize(db(), mid, role=role, actor_id=g.user['id'] if g.user else None).allowed
+
+    def sharing_label(m):
+        if m['archived']:
+            return 'Archived'
+        if m['visibility'] == 'private':
+            return 'Private'
+        control = db().execute('SELECT * FROM consent_controls WHERE memorial_id=?', (m['id'],)).fetchone()
+        if control:
+            grant = consent.current_grant(db(), m['id'])
+            if not consent.decide(grant, death_confirmed=bool(control['death_confirmed_at']), role='family').allowed:
+                return 'Sharing paused'
+            if grant['audience'] == 'family':
+                return 'Family'
+        return m['visibility'].capitalize()
 
     def visible(item, role):
         return role == 'owner' or (not item['archived'] and (item['visibility'] == 'public' or (role == 'family' and item['visibility'] == 'family')))
@@ -248,8 +274,10 @@ def create_app(config=None):
     @login_required
     def dashboard():
         own = db().execute('SELECT * FROM memorials WHERE owner_id=? ORDER BY created DESC', (g.user['id'],)).fetchall()
+        own = [dict(m, sharing_label=sharing_label(m)) for m in own]
         shared = db().execute('SELECT m.* FROM memorials m JOIN members f ON f.memorial_id=m.id '
                              "WHERE f.email=? AND m.visibility IN ('public','family') AND m.archived=0", (g.user['email'],)).fetchall()
+        shared = [m for m in shared if m['owner_id'] == g.user['id'] or sharing_allowed(m['id'], 'family')]
         return render_template('dashboard.html', memorials=own, shared=shared)
 
     def memorial_fields():
@@ -317,7 +345,41 @@ def create_app(config=None):
         return render_template('manage.html', m=m, media=rows('media'), events=rows('events'),
                                tributes=rows('tributes'), members=rows('members'),
                                audit=db().execute('SELECT * FROM audit WHERE memorial_id=? ORDER BY id DESC LIMIT 30', (mid,)).fetchall(),
-                               reports=rows('reports'))
+                               reports=rows('reports'), sharing_label=sharing_label(m),
+                               sharing_control=db().execute('SELECT * FROM consent_controls WHERE memorial_id=?', (mid,)).fetchone())
+
+    @app.route('/m/<mid>/consent', methods=['GET', 'POST'])
+    @login_required
+    def consent_page(mid):
+        m = owned_action(mid)
+        if request.method == 'POST':
+            rate_limit('consent-grant', 20)
+            if request.form.get('consent') != 'yes':
+                abort(400, 'Confirm the sharing permission before recording a grant.')
+            consent.record_grant(db(), mid, g.user['id'], signed_name=field('signed_name', 120, True),
+                                 audience=field('audience'), activation=field('activation'))
+            flash('Your grant is recorded. Visitor access is paused until the operator reviews it and the release conditions are met.')
+            return redirect(url_for('consent_page', mid=mid))
+        control = db().execute('SELECT * FROM consent_controls WHERE memorial_id=?', (mid,)).fetchone()
+        grant = consent.current_grant(db(), mid)
+        decision = consent.decide(grant, death_confirmed=bool(control and control['death_confirmed_at']),
+                                  role='family' if grant and grant['audience'] == 'family' else 'public')
+        return render_template('consent.html', m=m, control=control, grant=grant, decision=decision, declaration=consent.DECLARATION_TEXT,
+                               grants=db().execute('SELECT * FROM consent_grants WHERE memorial_id=? ORDER BY created_at DESC', (mid,)).fetchall(),
+                               history=db().execute('SELECT * FROM consent_events WHERE memorial_id=? ORDER BY sequence DESC LIMIT 30', (mid,)).fetchall())
+
+    @app.post('/m/<mid>/consent/<gid>/revoke')
+    @login_required
+    def revoke_consent(mid, gid):
+        owned_action(mid)
+        changed = consent.revoke_grant(db(), mid, gid, owner_id=g.user['id'])
+        flash('Grant revoked. Visitors can no longer open this memorial or its media. Copies already downloaded cannot be recalled.'
+              if changed else 'That grant was already revoked. Check the current sharing status below.')
+        return redirect(url_for('consent_page', mid=mid))
+
+    @app.errorhandler(consent.ConsentError)
+    def consent_error(error):
+        return render_template('error.html', error=BadRequest(str(error))), 400
 
     @app.post('/m/<mid>/upload')
     @login_required
@@ -597,6 +659,11 @@ def create_app(config=None):
             payload[table] = [dict(x) for x in db().execute(f'SELECT * FROM {table} WHERE memorial_id=?', (mid,))]
         for t in payload['tributes']:
             t.pop('withdrawal_hash', None)
+        control = db().execute('SELECT * FROM consent_controls WHERE memorial_id=?', (mid,)).fetchone()
+        if control:
+            payload['consent'] = {'control': dict(control),
+                                  'grants': [dict(x) for x in db().execute('SELECT * FROM consent_grants WHERE memorial_id=? ORDER BY created_at', (mid,))],
+                                  'history': [dict(x) for x in db().execute('SELECT * FROM consent_events WHERE memorial_id=? ORDER BY sequence', (mid,))]}
         out = tempfile.TemporaryFile()
         with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
             z.writestr('memorial.json', json.dumps(payload, indent=2, ensure_ascii=False))
@@ -669,7 +736,7 @@ def create_app(config=None):
     @app.get('/healthz')
     def health():
         db().execute('SELECT 1').fetchone()
-        return {'status': 'ok', 'schema': 1}
+        return {'status': 'ok', 'schema': database.version(db())}
 
     @app.errorhandler(400)
     @app.errorhandler(401)
@@ -720,6 +787,87 @@ def create_app(config=None):
         """Review reports through server access; outputs personal information."""
         for row in db().execute("SELECT * FROM reports WHERE status='open' ORDER BY created"):
             click.echo(json.dumps(dict(row)))
+
+    @app.cli.group('consent')
+    def consent_commands():
+        """Operator review of memorial sharing, after independent evidence checks."""
+
+    def operator_options(fn):
+        fn = click.option('--reviewer', required=True, help='Opaque operator ID, not a personal name.')(fn)
+        return click.option('--reference', required=True, help='Private case reference; only its digest is stored.')(fn)
+
+    def consent_operation(fn, *args, **kwargs):
+        try:
+            return fn(db(), *args, **kwargs)
+        except consent.ConsentError as error:
+            raise click.ClickException(str(error)) from error
+
+    @consent_commands.command('pending')
+    def pending_consents():
+        """List grant references awaiting review; no identity documents are stored here."""
+        for row in db().execute("SELECT id,memorial_id,authority,audience,activation,created_at FROM consent_grants WHERE status='pending' ORDER BY created_at"):
+            click.echo(json.dumps(dict(row)))
+
+    @consent_commands.command('show')
+    @click.argument('grant_id')
+    def show_consent(grant_id):
+        """Read the recorded declaration for review. Output includes the signer's name."""
+        grant = db().execute('SELECT * FROM consent_grants WHERE id=?', (grant_id,)).fetchone()
+        if grant is None:
+            raise click.ClickException('Grant not found.')
+        click.echo(json.dumps(dict(grant), indent=2))
+
+    @consent_commands.command('verify')
+    @click.argument('grant_id')
+    @operator_options
+    def verify_consent(grant_id, reviewer, reference):
+        """Record completed authority/consent review. This is not automated verification."""
+        consent_operation(consent.verify_grant, grant_id, reviewer=reviewer, reference=reference)
+        click.echo('Grant reviewed. Release time, audience and existing visibility still apply.')
+
+    @consent_commands.command('confirm-death')
+    @click.argument('memorial_id')
+    @click.option('--date', 'death_date', required=True, help='Independently confirmed date, YYYY-MM-DD.')
+    @operator_options
+    def confirm_consent_death(memorial_id, death_date, reviewer, reference):
+        """Record independently reviewed evidence of passing for an opted-in memorial."""
+        consent_operation(consent.confirm_death, memorial_id, death_date=death_date, reviewer=reviewer, reference=reference)
+        click.echo('Confirmation recorded. Reviewed grants marked after passing may now allow sharing.')
+
+    @consent_commands.command('clear-death')
+    @click.argument('memorial_id')
+    @operator_options
+    def clear_consent_death(memorial_id, reviewer, reference):
+        """Correct a mistaken confirmation; after-passing grants stop allowing access."""
+        consent_operation(consent.clear_death, memorial_id, reviewer=reviewer, reference=reference)
+        click.echo('Confirmation cleared. After-passing grants are suspended.')
+
+    @consent_commands.command('revoke')
+    @click.argument('memorial_id')
+    @click.argument('grant_id')
+    @operator_options
+    def operator_revoke_consent(memorial_id, grant_id, reviewer, reference):
+        """Revoke a grant after an operator review, for example an authority dispute."""
+        changed = consent_operation(consent.revoke_grant, memorial_id, grant_id, reviewer=reviewer, reference=reference)
+        click.echo('Grant revoked; future visitor requests are blocked.' if changed else 'That grant was already revoked; check whether a replacement grant exists.')
+
+    @consent_commands.command('audit')
+    @click.option('--checkpoint', type=click.Path(exists=True, dir_okay=False, path_type=Path))
+    @click.option('--output', type=click.Path(dir_okay=False, path_type=Path))
+    def consent_audit(checkpoint, output):
+        """Verify chains, optionally against an earlier off-host checkpoint. Never overwrites output."""
+        try:
+            prior = json.loads(checkpoint.read_text()) if checkpoint else None
+            heads = consent_operation(consent.verify_history, checkpoint=prior)
+            content = json.dumps(heads, indent=2) + '\n'
+            if output:
+                with os.fdopen(os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w') as stream:
+                    stream.write(content)
+                click.echo(f'Verified checkpoint written to {output}. Keep a copy off this host.')
+            else:
+                click.echo(content, nl=False)
+        except (OSError, json.JSONDecodeError) as error:
+            raise click.ClickException(str(error)) from error
 
     return app
 

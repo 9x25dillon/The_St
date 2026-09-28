@@ -1,4 +1,4 @@
-# Remembrance architecture — pilot release 1
+# Remembrance architecture — pilot release 2
 
 ## What has been built
 
@@ -26,6 +26,7 @@ flowchart TB
 |---|---|
 | Accounts | Registration, scrypt password hashing, signed HttpOnly/SameSite cookies, 12-hour sessions, login/logout; operator-assisted password recovery |
 | Memorials | Multiple memorials, private default, edit biography/dates/location, public/family/private audience, archive and restore |
+| Reviewed sharing | Opt-in sharing grants; operator review; optional activation after confirmed passing; owner/operator revocation; chained consent history |
 | Authority | Typed authority declaration and timestamp; self / executor / authorized family options; no assertion of legal verification |
 | Media | JPEG/PNG/WebP rewritten as JPEG with metadata removed; MP4/WebM/MP3/WAV/M4A validated by basic signatures; per-item audience; captions; portrait selection; archive/restore |
 | Timeline | Dated chapters, per-item visibility, archive/restore, prepared JSON import initially private |
@@ -40,7 +41,7 @@ flowchart TB
 
 ## Data and permissions
 
-`schema.sql` is the complete initial schema. `PRAGMA user_version=1` marks the release. Future schema changes require numbered migrations and a verified pre-migration backup; restarting only creates missing tables, it does not evolve columns.
+`schema.sql` is the version-1 baseline; `migrations/002_consent.sql` adds reviewed sharing. Fresh databases initialize at `PRAGMA user_version=2`. Existing version-1 databases require the explicit, backup-first upgrade in [the consent workflow](CONSENT-WORKFLOW.md). Startup rejects unsupported versions. Future changes require numbered migrations and a verified pre-migration backup.
 
 - `users`: identity, password hash, created time. No social OAuth tokens.
 - `memorials`: owner, story, consent, visibility, portrait reference, successor preference, archive state.
@@ -51,6 +52,8 @@ flowchart TB
 - `candles`: keyed visitor digest and date, with 30-day purge when a candle is lit.
 - `audit`: action, actor ID, target ID, time. Does not copy deleted tribute text or historical biographies.
 - `reports`: contact address, category, detail, processing state.
+- `consent_controls`, `consent_grants`: opted-in release settings, operator confirmations, typed declarations and reviewed/revoked grants.
+- `consent_events`: append-only consent lifecycle and decision history, with per-memorial SHA-256 chaining and off-host checkpoint verification.
 - `rate_limits`: keyed network digest and rolling hour buckets, no raw IP analytics.
 
 | Resource | Public visitor | Granted family account | Owner |
@@ -65,7 +68,7 @@ flowchart TB
 | Approved tribute | Read if profile readable | Read if profile readable | Moderate |
 | Family grants, consent, reports, ZIP | Hidden | Hidden | Read/manage |
 
-Every media request resolves both profile and item permission. File paths are not exposed through a public static directory. Names never become filesystem paths. Family access does not confer editing or moderation power. The public owner page is a preview of everything the owner can see; labels distinguish nonpublic items. Use a signed-out browser for an exact visitor view.
+Every media request resolves both profile and item permission. For opted-in memorials, visitor access also requires a reviewed consent grant whose release conditions and audience permit it. Owners retain management, preview and export access. Revocation blocks subsequent requests; an already-authorized response may finish. See [the consent workflow](CONSENT-WORKFLOW.md) for review, revocation and history verification. File paths are not exposed through a public static directory. Names never become filesystem paths. Family access does not confer editing or moderation power. The public owner page is a preview of everything the owner can see; labels distinguish nonpublic items. Use a signed-out browser for an exact visitor view.
 
 ## Security and privacy boundaries
 

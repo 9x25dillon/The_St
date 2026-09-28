@@ -3,7 +3,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 REMEMBRANCE_
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home remembrance && mkdir /data /erasure && chown remembrance:remembrance /data /erasure
-COPY --chown=remembrance:remembrance app.py schema.sql consent.py database.py erasure.py succession.py ./
+COPY --chown=remembrance:remembrance app.py schema.sql consent.py database.py erasure.py kernel_client.py succession.py ./
 COPY --chown=remembrance:remembrance migrations ./migrations
 COPY --chown=remembrance:remembrance templates ./templates
 COPY --chown=remembrance:remembrance static ./static

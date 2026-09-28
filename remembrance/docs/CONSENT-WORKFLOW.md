@@ -85,7 +85,7 @@ Reviewed succession is documented in [the succession workflow](SUCCESSION-WORKFL
 
 This is a single-host consent foundation. Every request that reaches the gate adds a decision event and briefly takes SQLite's writer lock. Monitor disk growth and write contention before increasing traffic. There is no retention job for this append-only history. Existing network rate limits apply to grant submissions; this release does not add a distributed rate limiter for reads.
 
-Not included: voice generation, JWT issuance, external artifact deletion, beneficiary quorum, automatic succession, PostgreSQL, Celery or Redis. These require further integration; none is implied by a reviewed memorial-view grant.
+Voice actions, their signed tokens, beneficiary quorum and deletion of voice artifacts belong to the separate consent kernel; see [Voice and the consent kernel](ARCHITECTURE.md#voice-and-the-consent-kernel). None is implied by a reviewed memorial-view grant. Not included here: voice generation, automatic succession, PostgreSQL, Celery or Redis.
 
 ## Verification
 

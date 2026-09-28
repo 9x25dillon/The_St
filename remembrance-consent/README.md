@@ -10,11 +10,10 @@ Out of scope here: voice synthesis, TTS, scraping, script LLM calls,
 delivery, UI, billing.
 
 > **Why a separate directory.** The memorial web app (Flask, SQLite,
-> `127.0.0.1:8787`) lives in an **uncommitted** `remembrance/` directory on
-> the development machine. Putting this service's `app/` package there would
-> shadow `remembrance/app.py` and collide with those untracked files on the
-> next pull. `remembrance-consent/` is an independent service the web app
-> calls over HTTP.
+> `127.0.0.1:8787`) lives in `remembrance/`. Putting this service's `app/`
+> package there would shadow `remembrance/app.py`. `remembrance-consent/` is
+> an independent service the web app calls over HTTP, for voice actions only:
+> the web app keeps its own reviewed-sharing checks for memorial viewing.
 
 ## Architecture
 
@@ -257,6 +256,15 @@ pass it to whichever service does the work. Their tables must carry
 `consent_grant_id` in the shape of `app/downstream/models.py`, or
 revocation can't find their artifacts.
 
+The web app's client is `remembrance/kernel_client.py`, standard library
+only. It asserts `sub`, `iss`, `aud`, `iat`, `exp`, `actor_kind: "human"`
+and empty `roles`, and never an email: the web app does not verify
+addresses yet, so beneficiaries cannot acknowledge through it. It requests
+only `INITIATE_VOICE_SYNTHESIS`, `GENERATE_SCRIPT` and `DELIVER_MESSAGE`,
+each under its fixed purpose; the web app does not use `VIEW_MEMORIAL`.
+`tests/consent/test_web_app_contract.py` runs that client against this
+kernel, and CI also runs when the client changes.
+
 ## Deviations from the brief (deliberate)
 
 - **`kernel.py`, not `consent_kernel.py`**: follows the brief's file tree.
@@ -312,8 +320,9 @@ revocation can't find their artifacts.
    job. Revocation is currently the only destruction path.
 4. **Contested estates.** Two verified grants from different estate roles
    operate independently. Should a dispute flag freeze the whole profile?
-5. **Reconciling documents.** The web app's local `docs/ESTATE-AND-CONSENT.md`
-   (uncommitted) should be reconciled with this enforcement model.
+5. **Reconciling documents.** The web app's `docs/ESTATE-AND-CONSENT.md`
+   now defers voice authorization to this kernel. Its estate-review guidance
+   and this enforcement model still need a joint legal review.
 
 ## Evidence vs speculation
 

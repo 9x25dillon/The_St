@@ -26,11 +26,12 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import BadRequest, SecurityError
 
 if __package__:
-    from . import consent, database, erasure, succession
+    from . import consent, database, erasure, kernel_client, succession
 else:
     import consent
     import database
     import erasure
+    import kernel_client
     import succession
 
 ROOT = Path(__file__).resolve().parent
@@ -82,6 +83,9 @@ def create_app(config=None):
     if app.config['SESSION_COOKIE_SECURE'] and origin.scheme != 'https':
         raise ValueError('Secure deployment requires an https PUBLIC_URL')
     app.config['TRUSTED_HOSTS'] = [origin.hostname]
+    if 'CONSENT_KERNEL' not in app.config:
+        # Voice actions are authorized only by the separate consent kernel; None disables them.
+        app.config['CONSENT_KERNEL'] = kernel_client.KernelConfig.from_env(os.environ)
 
     def db():
         if 'db' not in g:
@@ -1072,6 +1076,19 @@ def create_app(config=None):
         """Erased memorial IDs with review digests. No content remains to show."""
         for row in erasure.registry(db()):
             click.echo(json.dumps(row))
+
+    @app.cli.group('kernel')
+    def kernel_commands():
+        """The separate consent kernel, which alone authorizes voice actions."""
+
+    @kernel_commands.command('check')
+    def check_kernel():
+        """Confirm the kernel is reachable and accepts this app's identity assertions. Records nothing."""
+        try:
+            kernel_client.check(app.config['CONSENT_KERNEL'])
+        except kernel_client.KernelDenied as denied:
+            raise click.ClickException(f'Consent kernel check failed: {denied.reason}.') from denied
+        click.echo(f'The consent kernel at {app.config["CONSENT_KERNEL"].url} accepts this app’s identity assertions.')
 
     return app
 

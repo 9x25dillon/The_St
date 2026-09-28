@@ -17,6 +17,7 @@ flowchart TB
     App --> QR[H-level SVG / PNG QR generation]
     App --> Export[ZIP: JSON + media + offline HTML]
     App --> Ledger[Erasure ledger outside the data volume]
+    App -. voice actions only .-> Kernel[Separate consent kernel: remembrance-consent]
     DB --> Backup[Encrypted off-site backup workflow]
     Files --> Backup
 ```
@@ -106,6 +107,30 @@ Import up to 100 chapters at once. Validation is atomic; everything is initially
 ## Reviewed succession
 
 Owners nominate an existing account using its confirmed email and account code. The nominee accepts or declines without receiving additional content access. An operator verifies authority and completes the transfer using the exact source and destination account IDs. The former owner loses management access; concurrent stale edits are rolled back. Existing consent grants, release conditions, content and memorial IDs remain in place. See [the succession workflow](SUCCESSION-WORKFLOW.md).
+
+## Voice and the consent kernel
+
+Decided 28 September 2026: this app keeps its own reviewed-sharing checks for memorial viewing, and voice actions (synthesis, script generation and message delivery) are authorized only by the separate consent kernel in `remembrance-consent/`. No voice feature is shipped yet. The kernel's `VIEW_MEMORIAL` action is not used by this app.
+
+`kernel_client.py` is the only path to voice authorization. For each request it signs a five-minute HS256 identity assertion with the key shared with the kernel, asks `POST /consent/authorize` for one action on one kernel profile under that action's fixed purpose, and returns the kernel's signed token. Every other outcome is a denial: missing configuration, an unreachable kernel, a rejected assertion, a redirect, a malformed or oversized reply, or an approval that does not match the request.
+
+Configure both settings or neither; a half configuration stops startup.
+
+- `REMEMBRANCE_CONSENT_KERNEL_URL`: the kernel's base URL. Use HTTPS or a loopback or private network, because assertions are bearer credentials.
+- `REMEMBRANCE_AUTH_JWT_KEY`: the same value as the kernel's `REMEMBRANCE_AUTH_JWT_KEY`, at least 32 bytes, with the kernel on its default HS256 algorithm. If the kernel changes `REMEMBRANCE_AUTH_JWT_ISSUER` or `REMEMBRANCE_AUTH_JWT_AUDIENCE`, set the same values here.
+
+`flask --app app kernel check` confirms that the kernel is reachable and accepts this app's assertions, using reads only.
+
+Assertions carry the account ID as `sub`, no roles and no email, because this app does not verify email addresses and the kernel trusts only verified ones. Voice actions belong to a grant's grantor, or its designated successors under a pre-need grant, matched by account ID, so they do not need email. Named beneficiaries acknowledge grants by verified email and cannot do so through this app until it verifies addresses. Kernel administration, such as authority review and death records, happens outside this app.
+
+The first voice feature must:
+
+1. Record which kernel profile belongs to each memorial, in a table that erasure removes. The erasure schema test enforces the removal.
+2. Call `kernel_client.authorize_voice` for every action and send the token to the service doing the work in its `X-Consent-Authorization` header. Never reuse a token for another action.
+3. Store `consent_grant_id` on every voice artifact in the shape of the kernel's `app/downstream/models.py`, so revocation can find and delete it.
+4. Revoke the memorial's kernel grants when erasing it here. This app's erasure does not reach the kernel; the kernel's revocation cascade deletes voice models and audio.
+
+The kernel's test suite loads `kernel_client.py` directly in `tests/consent/test_web_app_contract.py`, so its CI fails when either side breaks the contract.
 
 ## Capacity and evolution
 

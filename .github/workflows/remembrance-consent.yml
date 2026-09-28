@@ -2,9 +2,9 @@ name: remembrance-consent
 
 on:
   push:
-    paths: ["remembrance-consent/**", ".github/workflows/remembrance-consent.yml"]
+    paths: ["remembrance-consent/**", "remembrance/kernel_client.py", ".github/workflows/remembrance-consent.yml"]
   pull_request:
-    paths: ["remembrance-consent/**", ".github/workflows/remembrance-consent.yml"]
+    paths: ["remembrance-consent/**", "remembrance/kernel_client.py", ".github/workflows/remembrance-consent.yml"]
 
 permissions:
   contents: read

@@ -1,0 +1,8 @@
+{% extends 'base.html' %}{% block content %}<section class="reading section"><a class="back-link" href="{{ url_for('manage', mid=mid) }}">← Back to memorial care</a><p class="eyebrow">BRING YOUR STORIES WITH YOU</p><h1>Import prepared memories.</h1><p>Upload a JSON file in the format below. Up to 100 entries are added as private timeline chapters for your review. This accepts a prepared file, not a direct Facebook, Instagram, or X export. Upload media separately.</p><pre><code>{
+  "format": "remembrance-import",
+  "version": 1,
+  "memories": [
+    {"year": 1985, "title": "A new garden",
+     "story": "We planted the first apple tree together."}
+  ]
+}</code></pre><form method="post" enctype="multipart/form-data" class="panel form-stack"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Memory file<input type="file" name="file" accept=".json,application/json" required></label><label class="check"><input type="checkbox" name="consent" value="yes" required><span>I have authority and permission to import these stories.</span></label><button class="button">Import as private chapters</button></form></section>{% endblock %}

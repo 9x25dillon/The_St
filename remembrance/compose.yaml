@@ -1,0 +1,32 @@
+name: remembrance
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:?Set SUPPORT_EMAIL in .env}
+      REMEMBRANCE_SECURE: "1"
+      TRUST_PROXY: "1"
+      MAX_MEDIA_BYTES: ${MAX_MEDIA_BYTES:-1073741824}
+    volumes:
+      - memories:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; from urllib.parse import urlsplit; r=urllib.request.Request('http://127.0.0.1:8787/healthz',headers={'Host':urlsplit(os.environ['PUBLIC_URL']).netloc}); urllib.request.urlopen(r,timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+volumes:
+  memories:

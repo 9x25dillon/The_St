@@ -1,0 +1,8 @@
+# ADD this site block to your existing host Caddyfile. Do not replace other sites.
+remembrance.astra-arcana.com {
+    request_body {
+        max_size 32MB
+    }
+    reverse_proxy 127.0.0.1:8787
+    # Access logging is deliberately not enabled for memorial visitors.
+}

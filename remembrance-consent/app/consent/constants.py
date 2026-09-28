@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final, Mapping
+from typing import Final
 from uuid import UUID
 
 

@@ -2,7 +2,7 @@
 Clock so audit hashes, token lifetimes and cascade staleness are testable."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 
@@ -12,7 +12,7 @@ class Clock(Protocol):
 
 class SystemClock:
     def now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 class ManualClock:
@@ -21,7 +21,7 @@ class ManualClock:
     def __init__(self, start: datetime) -> None:
         if start.tzinfo is None:
             raise ValueError("ManualClock needs an aware datetime")
-        self._now = start.astimezone(timezone.utc)
+        self._now = start.astimezone(UTC)
 
     def now(self) -> datetime:
         return self._now

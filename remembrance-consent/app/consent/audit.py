@@ -27,10 +27,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -59,7 +60,7 @@ def canonical_json(value: Any) -> str:
 def format_timestamp(moment: datetime) -> str:
     if moment.tzinfo is None:
         raise ValueError("audit timestamps must be timezone-aware")
-    return moment.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    return moment.astimezone(UTC).isoformat(timespec="microseconds")
 
 
 def _check_value(value: Any, depth: int) -> None:

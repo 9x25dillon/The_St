@@ -10,7 +10,7 @@ Invariants:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, BigInteger, DateTime, Integer, String
@@ -36,15 +36,15 @@ class UTCDateTime(TypeDecorator[datetime]):
             return None
         if value.tzinfo is None:
             raise ValueError("naive datetimes are not accepted; use an aware UTC datetime")
-        value = value.astimezone(timezone.utc)
+        value = value.astimezone(UTC)
         return value.replace(tzinfo=None) if dialect.name == "sqlite" else value
 
     def process_result_value(self, value: datetime | None, dialect: Dialect) -> datetime | None:
         if value is None:
             return None
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class PurposeScopeSet(TypeDecorator[frozenset[PurposeScope]]):

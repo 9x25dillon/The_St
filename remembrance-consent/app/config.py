@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _production_requires_real_material(self) -> "Settings":
-        self.verification_keys  # validate JSON shape eagerly
+        _ = self.verification_keys  # validate the JSON shape eagerly
         if self.env != "production":
             return self
         problems = []

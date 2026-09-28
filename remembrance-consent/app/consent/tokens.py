@@ -17,10 +17,11 @@ columns; the database role remembrance_token_reader enforces that.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 import jwt
@@ -124,7 +125,7 @@ class TokenIssuer:
         purpose: str,
         now: datetime,
     ) -> IssuedToken:
-        issued_at = now.astimezone(timezone.utc).replace(microsecond=0)
+        issued_at = now.astimezone(UTC).replace(microsecond=0)
         expires_at = issued_at + timedelta(seconds=self._ttl)
         claims: dict[str, Any] = {
             "iss": self._issuer,
@@ -300,8 +301,8 @@ class TokenValidator:
             profile_id=token_profile,
             grant_id=grant_id,
             purpose=str(claims["pur"]),
-            issued_at=datetime.fromtimestamp(iat, timezone.utc),
-            expires_at=datetime.fromtimestamp(exp, timezone.utc),
+            issued_at=datetime.fromtimestamp(iat, UTC),
+            expires_at=datetime.fromtimestamp(exp, UTC),
             synthetic_disclosure_required=bool(claims.get("dsc", False)),
         )
 

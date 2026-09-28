@@ -1,0 +1,44 @@
+name: remembrance-consent
+
+on:
+  push:
+    paths: ["remembrance-consent/**", ".github/workflows/remembrance-consent.yml"]
+  pull_request:
+    paths: ["remembrance-consent/**", ".github/workflows/remembrance-consent.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: remembrance-consent
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      REMEMBRANCE_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          sudo apt-get update && sudo apt-get install -y redis-server
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" ruff
+      - name: Lint
+        run: ruff check app migrations scripts tests
+      - name: Test (unit + PostgreSQL integration, coverage gate 90%)
+        run: pytest -q --cov=app --cov=scripts --cov-report=term-missing:skip-covered

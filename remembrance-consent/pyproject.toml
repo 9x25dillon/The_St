@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remembrance-consent"
+version = "1.0.0"
+description = "Remembrance consent, authorization and governance kernel for posthumous voice features"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0.30,<2.1",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3",
+    "email-validator>=2.1",
+    "pyjwt[crypto]>=2.8",
+    "cryptography>=42",
+    "celery[redis]>=5.4",
+    "redis>=5",
+]
+
+[project.optional-dependencies]
+s3 = ["boto3>=1.34"]
+test = [
+    "httpx>=0.27",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "testcontainers[postgres]>=4.7",
+    "moto[s3]>=5",
+    "boto3>=1.34",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: needs a real PostgreSQL server (testcontainers, REMEMBRANCE_TEST_DATABASE_URL, or local binaries)",
+]
+filterwarnings = [
+    "error::sqlalchemy.exc.SAWarning",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 90
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.$",
+]

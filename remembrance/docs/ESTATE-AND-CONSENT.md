@@ -12,7 +12,7 @@ The app records declarations and supports moderation, access controls, reports, 
 | Who may obtain a deceased person’s account data? | Applicable fiduciary-access law, account-provider process, deceased person’s directions, necessary documentation | No access to external accounts; no scraping |
 | Who owns each photo, film, recording, or text? | Copyright ownership, written license, permission, or counsel-reviewed legal basis | Requires upload-rights confirmation, preserves chosen visibility |
 | Who is depicted or discussed? | Privacy/publicity considerations; consent where required; special treatment for children and sensitive details | Child-media toggle defaults a public upload to family-only; reporting workflow |
-| Who inherits memorial administration? | Valid applicable instructions and authority, identity verification, scope of permitted disclosure | Stores revocable successor preference; no automatic handover |
+| Who inherits memorial administration? | Valid applicable instructions and authority, identity verification, scope of permitted disclosure | Records account-bound nominations and acceptance; operator-reviewed transfer, with no automatic handover |
 | Who maintains hosting and the printed URL? | Domain and infrastructure ownership, funded operating plan, succession credentials held securely | Deployable server, stable URLs, export and backup tools |
 
 Authority to access an account is not blanket permission to publish it. Possessing a file is not ownership of its copyright. A funeral home or cemetery partnership does not confer estate or media rights.
@@ -84,7 +84,7 @@ Voice cloning is **not implemented**. Any future synthetic-voice feature needs a
 
 ## 7. Successor process and draft instruction
 
-The current successor email is a revocable preference. It does not give present access or trigger on an unverified death report. Notify the proposed successor through a verified out-of-band process and establish their willingness.
+Legacy successor emails remain unverified preferences. The current [succession workflow](SUCCESSION-WORKFLOW.md) binds a nomination to a confirmed account, records acceptance or decline, and requires an operator-reviewed transfer. It gives no additional access at nomination or acceptance and never triggers from a death date. Contact the proposed successor directly; the application sends no email.
 
 **Draft preference:** “If I die or become unable to administer this memorial, I prefer [name/contact] to be considered for continued stewardship, subject to verification of identity, applicable legal authority, restrictions I record, and the operator’s review process. Until that review is complete, this preference grants no access. My preferences concerning public, family-only, and private material are: [specific directions].”
 

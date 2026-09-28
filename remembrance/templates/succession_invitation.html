@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block title %}An invitation to care — Remembrance{% endblock %}
+{% block content %}
+<section class="reading section consent-page">
+  <a class="back-link" href="{{ url_for('dashboard') }}">← My memorials</a>
+  <p class="eyebrow">A TRUSTED PAIR OF HANDS</p>
+  <h1>An invitation to care.</h1>
+  <p class="lead">{{ invitation.inviter_name }} nominated you to care for the memorial named <strong>{{ invitation.memorial_name }}</strong>.</p>
+  <p class="fineprint">These names were shared when the nomination was recorded. This invitation does not reveal the memorial’s private content.</p>
+  {% if invitation.status == 'offered' %}
+  <section class="panel">
+    <h2>A choice you can make in your own time.</h2>
+    <p>Acceptance records your willingness. The operator must separately review authority for the transfer. It does not add viewing or editing access now.</p>
+    <form method="post" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="action" value="accept">
+      <label>Your authority for review<select name="authority" required><option value="">Choose the basis of your authority</option><option value="executor">Estate executor / authorized representative</option><option value="family-authorized">Family member with permission to care for this memorial</option></select></label>
+      <label>Your full name<input name="signed_name" maxlength="120" autocomplete="name" required></label>
+      <p>{{ declaration }}</p>
+      <p class="fineprint">Your recorded name and declaration are available to the memorial’s owners and operator. Arrange any identity or estate-document review separately with the operator.</p>
+      <label class="check"><input type="checkbox" name="consent" value="yes" required><span>I agree to this declaration and am willing to be considered for the transfer.</span></label>
+      <button class="button">Accept nomination for review</button>
+    </form>
+  </section>
+  {% elif invitation.status == 'accepted' %}
+  <section class="panel consent-status">
+    <p class="eyebrow">ACCEPTANCE RECORDED</p>
+    <h2>Waiting for operator review.</h2>
+    <p>The current owner keeps control until the operator completes a reviewed transfer. You can withdraw your acceptance below before that happens.</p>
+    <details><summary>Your recorded declaration</summary><p>{{ invitation.declaration_text }}</p><p>Recorded as {{ invitation.accepted_name }}.</p></details>
+    <p class="fineprint">Nomination reference: <code>{{ invitation.id }}</code></p>
+  </section>
+  {% elif invitation.status == 'completed' %}
+  <section class="panel consent-status"><h2>Care has been transferred.</h2><p>The operator completed this nomination. Your current memorials are listed on your dashboard.</p><a class="button" href="{{ url_for('dashboard') }}">Go to My memorials</a></section>
+  {% else %}
+  <section class="panel"><h2>This nomination is closed.</h2><p>It was {{ invitation.status }} and cannot be used for a transfer. The owner would need to record a new nomination.</p></section>
+  {% endif %}
+  {% if invitation.status in ('offered', 'accepted') %}
+  <section class="panel">
+    <h3>{{ 'Withdraw your acceptance' if invitation.status == 'accepted' else 'It is okay to decline' }}</h3>
+    <p>This closes the nomination and prevents a transfer from it.</p>
+    <form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button secondary" name="action" value="decline">{{ 'Withdraw acceptance' if invitation.status == 'accepted' else 'Decline nomination' }}</button></form>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

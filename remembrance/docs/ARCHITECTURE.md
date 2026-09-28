@@ -1,4 +1,4 @@
-# Remembrance architecture — pilot release 2
+# Remembrance architecture — pilot release 3
 
 ## What has been built
 
@@ -36,12 +36,12 @@ flowchart TB
 | QR | Stable random memorial ID, H error correction, four-module quiet zone, SVG/PNG download, print keepsake |
 | Portability | Owner ZIP includes stored media, all timeline/tribute states, consent, family list, audit metadata, JSON schema version, offline HTML viewer |
 | Concerns | Privacy/copyright/authority reports persisted for owner and operator; operator CLI report queue; no automatic email delivery |
-| Legacy | Successor preference retained without automatic account access; reviewed operator transfer tool |
+| Legacy | Account-bound nominations, recipient acceptance/withdrawal, owner cancellation and operator-reviewed transfer; existing URLs and consent controls preserved |
 | Offline | Static install shell only; explicit owner ZIP for complete offline memories |
 
 ## Data and permissions
 
-`schema.sql` is the version-1 baseline; `migrations/002_consent.sql` adds reviewed sharing. Fresh databases initialize at `PRAGMA user_version=2`. Existing version-1 databases require the explicit, backup-first upgrade in [the consent workflow](CONSENT-WORKFLOW.md). Startup rejects unsupported versions. Future changes require numbered migrations and a verified pre-migration backup.
+`schema.sql` is the version-1 baseline; `migrations/002_consent.sql` adds reviewed sharing, and `migrations/003_succession.sql` adds succession requests. Fresh databases initialize at `PRAGMA user_version=3`. Existing version-1 or version-2 databases require the explicit, backup-first upgrade in [the consent workflow](CONSENT-WORKFLOW.md). Startup rejects unsupported versions. Future changes require numbered migrations and a verified pre-migration backup.
 
 - `users`: identity, password hash, created time. No social OAuth tokens.
 - `memorials`: owner, story, consent, visibility, portrait reference, successor preference, archive state.
@@ -54,6 +54,7 @@ flowchart TB
 - `reports`: contact address, category, detail, processing state.
 - `consent_controls`, `consent_grants`: opted-in release settings, operator confirmations, typed declarations and reviewed/revoked grants.
 - `consent_events`: append-only consent lifecycle and decision history, with per-memorial SHA-256 chaining and off-host checkpoint verification.
+- `succession_requests`: bound owner/nominee accounts, nomination-name snapshots, acceptance declarations, transfer review and prior authority provenance.
 - `rate_limits`: keyed network digest and rolling hour buckets, no raw IP analytics.
 
 | Resource | Public visitor | Granted family account | Owner |
@@ -86,7 +87,7 @@ Registration does not send a verification email. Family grants require account-c
 
 Memorial IDs are 64-bit random hex strings, immutable across profile edits, and not reused. The route resolves directly to the database ID. Permanent physical markers encode the owned domain, not a third-party QR service. Keeping the same domain and importing the server backup preserves existing QR codes. A future platform migration must retain `/m/<id>` or serve a stable redirect to the new viewer.
 
-Ordinary removal is archiving. Contributor withdrawal is permanent deletion of live tribute content; the action log retains an opaque ID. Operator maintenance supports erasing a memorial or entire account after rights verification. Backups, previously exported owner archives, legal holds, and media featuring multiple people require a separate retention/erasure policy. Nothing here promises perpetual availability or prohibits lawful erasure.
+Ordinary removal is archiving. Contributor withdrawal is permanent deletion of live tribute content; the action log retains an opaque ID. Full memorial/account erasure requires an operator-run maintenance procedure after rights verification; a dedicated erasure command is not included. Backups, previously exported owner archives, legal holds, and media featuring multiple people require a separate retention/erasure policy. Nothing here promises perpetual availability or prohibits lawful erasure.
 
 The owner ZIP is a portable content package, not a full server restore: it omits account passwords and withdrawal secrets. The server backup format includes database plus media and can restore the service. These two formats intentionally serve different purposes.
 
@@ -97,6 +98,10 @@ The owner ZIP is a portable content package, not a full server restore: it omits
 ```
 
 Import up to 100 chapters at once. Validation is atomic; everything is initially private. Review and change visibility explicitly. Reimporting creates duplicates, so review your file once before submission. No external accounts are scraped or connected. The Saint adapters handle personal digital-footprint analysis, not deceased-account authorization; they were not silently repurposed as social importers.
+
+## Reviewed succession
+
+Owners nominate an existing account using its confirmed email and account code. The nominee accepts or declines without receiving additional content access. An operator verifies authority and completes the transfer using the exact source and destination account IDs. The former owner loses management access; concurrent stale edits are rolled back. Existing consent grants, release conditions, content and memorial IDs remain in place. See [the succession workflow](SUCCESSION-WORKFLOW.md).
 
 ## Capacity and evolution
 

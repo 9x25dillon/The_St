@@ -97,6 +97,57 @@ try{
   await until("document.body.innerText.includes('Sharing is paused.')");
   assert.equal(await anonymousStatus(),404,'Revocation must stop visitor access');
   await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  const signOut=async()=>{
+    await evaluate("document.querySelector('form[action=\"/logout\"] button').click()");
+    await until("location.pathname==='/' && document.readyState==='complete'");
+  };
+  const signIn=async email=>{
+    await go('/login');
+    await fill({email,password:'browser test passphrase'});
+    await evaluate('document.querySelector(".form-stack").requestSubmit()');
+    await until("location.pathname==='/dashboard' && document.body.innerText.includes('Held close.')");
+  };
+  await signOut();
+  await go('/register');
+  await fill({name:'Future Caretaker',email:'successor@example.com',password:'browser test passphrase',terms:true});
+  await evaluate('document.querySelector(".form-stack").requestSubmit()');
+  await until("location.pathname==='/dashboard' && document.body.innerText.includes('Future Caretaker')");
+  const nomineeId=await evaluate("document.querySelector('.section-heading code').textContent");
+  await signOut();
+  await signIn('browser@example.com');
+  const originalOwnerId=await evaluate("document.querySelector('.section-heading code').textContent");
+  await go(base+'/succession');
+  await fill({email:'successor@example.com',account_code:nomineeId,consent:true});
+  await evaluate('document.querySelector(".form-stack").requestSubmit()');
+  await until("document.body.innerText.includes('Waiting for their response.')");
+  assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Nomination must fit mobile');
+  await screenshot('succession-owner-mobile.png');
+  await signOut();
+  await signIn('successor@example.com');
+  assert.equal(await evaluate("document.body.innerText.includes('Invitations to care')"),true);
+  const invitationPath=await evaluate("document.querySelector('a[href^=\"/succession/\"]').getAttribute('href')");
+  await go(invitationPath);
+  assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Invitation must fit mobile');
+  assert.equal(await evaluate("document.body.innerText.includes('A browser-tested life story.')"),false,'Invitation must not reveal memorial content');
+  await screenshot('succession-invitation-mobile.png');
+  await fill({authority:'executor',signed_name:'Future Caretaker',consent:true});
+  await evaluate('document.querySelector(".form-stack").requestSubmit()');
+  await until("document.body.innerText.includes('Waiting for operator review.')");
+  assert.equal(await evaluate(`fetch(${JSON.stringify(base+'/manage')}).then(r=>r.status)`),403,'Acceptance must not grant editing access');
+  execFileSync(python,['-m','flask','--app','app','succession','transfer',invitationPath.split('/')[2],
+    '--from-owner',originalOwnerId,'--to-account',nomineeId,'--reviewer','browser-test','--reference','disposable-transfer-case'],{cwd:root,env});
+  await go(base+'/manage');
+  assert.equal(await evaluate("document.body.innerText.includes('Add a memory.')"),true,'Reviewed successor should now manage the memorial');
+  await go(base+'/consent');
+  assert.equal(await evaluate("document.body.innerText.includes('Sharing is paused.')"),true,'Transfer must preserve the revoked sharing grant');
+  assert.equal(await anonymousStatus(),404);
+  await go(invitationPath);
+  assert.equal(await evaluate("document.body.innerText.includes('Care has been transferred.')"),true);
+  await screenshot('succession-completed-mobile.png');
+  await signOut();
+  await signIn('browser@example.com');
+  assert.equal(await evaluate(`fetch(${JSON.stringify(base+'/manage')}).then(r=>r.status)`),403,'Former owner must lose management access');
+  assert.equal(await evaluate(`fetch(${JSON.stringify(base+'/export')}).then(r=>r.status)`),403,'Former owner must lose export access');
   await go('/install');
   await until("!!navigator.serviceWorker.controller");
   const cacheKeys=await evaluate("(async()=>{const paths=[];for(const key of await caches.keys()){const cache=await caches.open(key);for(const req of await cache.keys())paths.push(new URL(req.url).pathname);}return paths;})()");
@@ -108,7 +159,7 @@ try{
   await call('Page.navigate',{url:env.PUBLIC_URL+'/dashboard'});
   await until("document.body.innerText.includes('A quiet pause.')");
   assert.deepEqual(errors,[],'No browser script errors');
-  console.log('PASS: desktop/mobile layouts, registration, memorial creation, timeline, tribute moderation, candle, QR, consent review, after-passing release, revocation, install shell, and offline privacy. Screenshots in remembrance/dist/.');
+  console.log('PASS: desktop/mobile layouts, memorial flows, consent review/revocation, successor nomination/acceptance, reviewed transfer, former-owner access removal, preserved consent, and offline privacy. Screenshots in remembrance/dist/.');
 }catch(error){
   console.error(error);
   throw error;

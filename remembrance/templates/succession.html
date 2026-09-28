@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block title %}Passing on care — {{ m.name }} — Remembrance{% endblock %}
+{% block content %}
+<section class="reading section consent-page">
+  <a class="back-link" href="{{ url_for('manage', mid=m.id) }}">← Back to memorial care</a>
+  <p class="eyebrow">CARE THAT CAN CONTINUE</p>
+  <h1>Someone to carry it forward.</h1>
+  <p class="lead">Nominate a person you trust to care for {{ m.name }}’s memorial. They choose whether to accept, and an operator reviews authority before any transfer.</p>
+  {% if active %}
+  <section class="panel consent-status">
+    <p class="eyebrow">YOUR CURRENT NOMINATION</p>
+    <h2>{{ 'Ready for operator review.' if active.status == 'accepted' else 'Waiting for their response.' }}</h2>
+    <p><strong>{{ active.nominee_name }}</strong><br>{{ active.nominee_email }}</p>
+    {% if active.status == 'accepted' %}
+      <p>They have accepted the nomination. You remain the owner until the operator verifies authority for this transfer and completes it.</p>
+      <p class="fineprint">Share this nomination reference when arranging review:</p>
+      <p><code>{{ active.id }}</code></p>
+      {% if support_email %}<p><a href="mailto:{{ support_email }}">Contact the operator</a></p>{% endif %}
+    {% else %}
+      <p>The invitation appears on their My memorials page. Contact them directly; no email is sent.</p>
+    {% endif %}
+    <p class="fineprint">The nomination adds no viewing or editing access. You can cancel it until the transfer completes.</p>
+    <form method="post" action="{{ url_for('cancel_succession', mid=m.id, request_id=active.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button secondary">Cancel this nomination</button>
+    </form>
+  </section>
+  {% else %}
+  <section class="panel">
+    <p class="eyebrow">A PERSON YOU KNOW</p>
+    <h2>Choose who comes next.</h2>
+    <p>Ask them to create an account and share the account code shown on their My memorials page. Confirm their email and code directly with them.</p>
+    {% if m.successor and not nominations %}<p class="notice">Your previously saved preference is {{ m.successor }}. It has not been linked to a confirmed account or accepted.</p>{% endif %}
+    <form method="post" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Their account email<input type="email" name="email" maxlength="254" required></label>
+      <label>Their account code<input name="account_code" maxlength="16" autocomplete="off" required></label>
+      <label class="check"><input type="checkbox" name="consent" value="yes" required><span>I want to nominate this account and share the memorial’s name and my account name with them. I understand this adds no access to the memorial.</span></label>
+      <button class="button">Record nomination</button>
+    </form>
+  </section>
+  {% endif %}
+  <section class="panel">
+    <p class="eyebrow">WHEN CARE CHANGES HANDS</p>
+    <h2>The memories stay together.</h2>
+    <p>After an approved transfer, the new owner can care for and export the complete memorial, including private memories. Its address, content, family access and sharing permissions stay in place.</p>
+    <p>Your owner access ends when the transfer completes. Any family access recorded for your account is removed; the new owner can grant it again. You may still visit content open to the public.</p>
+    <p class="fineprint">This nomination records a preference and willingness. It does not verify estate authority, transfer ownership of uploaded works, or trigger automatically when a date of passing is entered.</p>
+  </section>
+  {% if nominations %}
+  <section class="panel">
+    <p class="eyebrow">THE RECORD OF CARE</p>
+    <h2>Nomination history.</h2>
+    <div class="item-list">{% for item in nominations %}<article><span class="badge">{{ item.status }}</span><p><strong>{{ item.nominee_name }}</strong> · {{ item.nominee_email }}</p><small>{{ item.created_at[:16].replace('T', ' ') }} UTC · {{ item.id }}</small>{% if item.status == 'completed' %}<p>Care transferred {{ item.closed_at[:16].replace('T', ' ') }} UTC.</p>{% endif %}</article>{% endfor %}</div>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

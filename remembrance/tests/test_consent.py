@@ -136,7 +136,7 @@ class ConsentTests(MemorialTestCase):
             restored = create_app({'TESTING': True, 'DATA_DIR': target, 'SECRET_KEY': 'restored-test-secret-not-for-real-use', 'PUBLIC_URL': 'http://localhost'})
             with restored.test_client() as client:
                 self.assertEqual(client.get(self.base).status_code, 404)
-                self.assertEqual(client.get('/healthz').json['schema'], 2)
+                self.assertEqual(client.get('/healthz').json['schema'], 3)
             with closing(sqlite3.connect(target / 'remembrance.sqlite3')) as conn:
                 conn.row_factory = sqlite3.Row
                 self.assertEqual(conn.execute('SELECT status FROM consent_grants').fetchone()[0], 'revoked')
@@ -281,7 +281,7 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(database.version(conn), 1)
             self.assertTrue(database.upgrade(path, backup))
             self.assertFalse(database.upgrade(path, backup))
-            for file, expected in ((path, 2), (backup, 1)):
+            for file, expected in ((path, 3), (backup, 1)):
                 with closing(sqlite3.connect(file)) as conn:
                     self.assertEqual(database.version(conn), expected)
                     self.assertEqual(conn.execute('SELECT name FROM users').fetchone()[0], 'Existing')
@@ -315,7 +315,7 @@ class MigrationTests(unittest.TestCase):
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 results = [pool.submit(initialize) for _ in range(2)]
-                self.assertEqual([result.result(timeout=10) for result in results], [2, 2])
+                self.assertEqual([result.result(timeout=10) for result in results], [3, 3])
             with closing(sqlite3.connect(path)) as conn:
                 conn.execute('PRAGMA user_version=99')
                 with self.assertRaises(RuntimeError):

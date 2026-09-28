@@ -26,10 +26,11 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import BadRequest, SecurityError
 
 if __package__:
-    from . import consent, database
+    from . import consent, database, succession
 else:
     import consent
     import database
+    import succession
 
 ROOT = Path(__file__).resolve().parent
 Image.MAX_IMAGE_PIXELS = 30_000_000
@@ -217,6 +218,16 @@ def create_app(config=None):
             abort(403, 'The example memorial is read-only.')
         return m
 
+    def commit_owned(mid):
+        """Recheck ownership while the write transaction excludes a concurrent transfer."""
+        if not db().in_transaction:
+            raise RuntimeError('An owner mutation must be committed within its write transaction')
+        current = db().execute('SELECT owner_id,demo FROM memorials WHERE id=?', (mid,)).fetchone()
+        if current is None or current['demo'] or current['owner_id'] != g.user['id']:
+            db().rollback()
+            abort(403, 'Memorial ownership changed. Your edit was not saved.')
+        db().commit()
+
     @app.route('/')
     def home():
         examples = db().execute("SELECT * FROM memorials WHERE demo=1 AND visibility='public' AND archived=0").fetchall()
@@ -278,7 +289,10 @@ def create_app(config=None):
         shared = db().execute('SELECT m.* FROM memorials m JOIN members f ON f.memorial_id=m.id '
                              "WHERE f.email=? AND m.visibility IN ('public','family') AND m.archived=0", (g.user['email'],)).fetchall()
         shared = [m for m in shared if m['owner_id'] == g.user['id'] or sharing_allowed(m['id'], 'family')]
-        return render_template('dashboard.html', memorials=own, shared=shared)
+        invitations = db().execute("SELECT s.id,s.memorial_name,s.inviter_name,s.status FROM succession_requests s "
+                                   "JOIN memorials m ON m.id=s.memorial_id WHERE s.nominee_id=? AND s.status IN ('offered','accepted') "
+                                   'AND m.owner_id=s.from_owner_id ORDER BY s.created_at DESC', (g.user['id'],)).fetchall()
+        return render_template('dashboard.html', memorials=own, shared=shared, invitations=invitations)
 
     def memorial_fields():
         values = {key: field(key, limit, key == 'name') for key, limit in
@@ -323,7 +337,7 @@ def create_app(config=None):
             db().execute('UPDATE memorials SET name=?,born=?,died=?,tagline=?,biography=?,location=?,visibility=?,updated=? WHERE id=?',
                          (*values.values(), now(), mid))
             audit(mid, 'profile-updated')
-            db().commit()
+            commit_owned(mid)
             flash('Your changes have been saved.')
             return redirect(url_for('manage', mid=mid))
         return render_template('edit.html', m=m)
@@ -377,9 +391,51 @@ def create_app(config=None):
               if changed else 'That grant was already revoked. Check the current sharing status below.')
         return redirect(url_for('consent_page', mid=mid))
 
+    @app.errorhandler(succession.SuccessionError)
     @app.errorhandler(consent.ConsentError)
     def consent_error(error):
         return render_template('error.html', error=BadRequest(str(error))), 400
+
+    @app.route('/m/<mid>/succession', methods=['GET', 'POST'])
+    @login_required
+    def succession_page(mid):
+        m = owned_action(mid)
+        if request.method == 'POST':
+            rate_limit('successor-nomination', 15)
+            if request.form.get('consent') != 'yes':
+                abort(400, 'Confirm the nomination and the information shared with this account.')
+            succession.nominate(db(), mid, g.user['id'], email=email_field(), account_code=field('account_code', 16, True))
+            flash('Nomination recorded. It appears on their My memorials page. No email was sent; contact them directly.')
+            return redirect(url_for('succession_page', mid=mid))
+        nominations = db().execute('SELECT s.*,u.name AS nominee_name,u.email AS nominee_email FROM succession_requests s '
+                                  'JOIN users u ON u.id=s.nominee_id WHERE s.memorial_id=? ORDER BY s.created_at DESC', (mid,)).fetchall()
+        active = next((item for item in nominations if item['status'] in succession.ACTIVE), None)
+        return render_template('succession.html', m=m, nominations=nominations, active=active)
+
+    @app.post('/m/<mid>/succession/<request_id>/cancel')
+    @login_required
+    def cancel_succession(mid, request_id):
+        owned_action(mid)
+        changed = succession.cancel(db(), mid, request_id, g.user['id'])
+        flash('Nomination cancelled. It can no longer be used to transfer this memorial.' if changed else 'That nomination is already closed.')
+        return redirect(url_for('succession_page', mid=mid))
+
+    @app.route('/succession/<request_id>', methods=['GET', 'POST'])
+    @login_required
+    def succession_invitation(request_id):
+        invitation = db().execute('SELECT * FROM succession_requests WHERE id=? AND nominee_id=?', (request_id, g.user['id'])).fetchone()
+        if invitation is None:
+            abort(404)
+        if request.method == 'POST':
+            rate_limit('successor-response', 20)
+            action = field('action')
+            if action == 'accept' and request.form.get('consent') != 'yes':
+                abort(400, 'Confirm your willingness and the declaration before accepting.')
+            succession.respond(db(), request_id, g.user['id'], action=action,
+                               signed_name=field('signed_name', 120), authority=field('authority', 80))
+            flash('Acceptance recorded. The operator must review authority before transferring care.' if action == 'accept' else 'Nomination declined. No transfer can proceed from it.')
+            return redirect(url_for('succession_invitation', request_id=request_id))
+        return render_template('succession_invitation.html', invitation=invitation, declaration=succession.DECLARATION_TEXT)
 
     @app.post('/m/<mid>/upload')
     @login_required
@@ -434,7 +490,7 @@ def create_app(config=None):
             if request.form.get('portrait') == 'yes' and mime.startswith('image/'):
                 db().execute('UPDATE memorials SET portrait_id=? WHERE id=?', (fid, mid))
             audit(mid, 'media-uploaded', fid)
-            db().commit()
+            commit_owned(mid)
         except Exception:
             path.unlink(missing_ok=True)
             raise
@@ -468,7 +524,7 @@ def create_app(config=None):
         else:
             abort(400)
         audit(mid, 'media-' + action, fid)
-        db().commit()
+        commit_owned(mid)
         return redirect(url_for('manage', mid=mid) + '#media')
 
     @app.post('/m/<mid>/events')
@@ -484,7 +540,7 @@ def create_app(config=None):
         eid = ident()
         db().execute('INSERT INTO events VALUES(?,?,?,?,?,?,0)', (eid, mid, year, field('title', 200, True), field('story', 5000), visibility()))
         audit(mid, 'event-added', eid)
-        db().commit()
+        commit_owned(mid)
         return redirect(url_for('manage', mid=mid) + '#timeline')
 
     @app.post('/m/<mid>/events/<eid>')
@@ -498,7 +554,7 @@ def create_app(config=None):
             abort(400)
         db().execute('UPDATE events SET archived=? WHERE id=?', (int(action == 'archive'), eid))
         audit(mid, 'event-' + action, eid)
-        db().commit()
+        commit_owned(mid)
         return redirect(url_for('manage', mid=mid) + '#timeline')
 
     @app.post('/m/<mid>/tributes')
@@ -542,7 +598,7 @@ def create_app(config=None):
         if not changed:
             abort(404)
         audit(mid, 'tribute-' + status, tid)
-        db().commit()
+        commit_owned(mid)
         flash('The tribute has been ' + status + '.')
         return redirect(url_for('manage', mid=mid) + '#tributes')
 
@@ -577,7 +633,7 @@ def create_app(config=None):
         else:
             abort(400)
         audit(mid, 'family-access-' + action)
-        db().commit()
+        commit_owned(mid)
         flash('Family access updated. No email was sent; share the memorial link directly.')
         return redirect(url_for('manage', mid=mid) + '#access')
 
@@ -587,14 +643,13 @@ def create_app(config=None):
         owned_action(mid)
         action = field('action')
         if action == 'successor':
-            successor = email_field('successor', required=False)
-            db().execute('UPDATE memorials SET successor=? WHERE id=?', (successor, mid))
+            abort(400, 'Use the succession page to nominate a confirmed account.')
         elif action in ('archive', 'restore'):
             db().execute('UPDATE memorials SET archived=? WHERE id=?', (int(action == 'archive'), mid))
         else:
             abort(400)
         audit(mid, 'memorial-' + action)
-        db().commit()
+        commit_owned(mid)
         flash('Settings saved.')
         return redirect(url_for('manage', mid=mid) + '#access')
 
@@ -622,7 +677,7 @@ def create_app(config=None):
         if not db().execute("UPDATE reports SET status='reviewed' WHERE id=? AND memorial_id=?", (rid, mid)).rowcount:
             abort(404)
         audit(mid, 'report-reviewed', rid)
-        db().commit()
+        commit_owned(mid)
         flash('Marked reviewed. Contact the requester separately to communicate the outcome.')
         return redirect(url_for('manage', mid=mid))
 
@@ -664,6 +719,11 @@ def create_app(config=None):
             payload['consent'] = {'control': dict(control),
                                   'grants': [dict(x) for x in db().execute('SELECT * FROM consent_grants WHERE memorial_id=? ORDER BY created_at', (mid,))],
                                   'history': [dict(x) for x in db().execute('SELECT * FROM consent_events WHERE memorial_id=? ORDER BY sequence', (mid,))]}
+        nominations = [dict(x) for x in db().execute('SELECT * FROM succession_requests WHERE memorial_id=? ORDER BY created_at', (mid,))]
+        if nominations:
+            payload['succession'] = nominations
+            if not control:
+                payload['consent_history'] = [dict(x) for x in db().execute('SELECT * FROM consent_events WHERE memorial_id=? ORDER BY sequence', (mid,))]
         out = tempfile.TemporaryFile()
         with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
             z.writestr('memorial.json', json.dumps(payload, indent=2, ensure_ascii=False))
@@ -706,7 +766,7 @@ def create_app(config=None):
                 abort(400, 'Confirm that you are authorized to import these memories.')
             db().executemany('INSERT INTO events VALUES(?,?,?,?,?,?,0)', cleaned)
             audit(mid, 'private-memories-imported')
-            db().commit()
+            commit_owned(mid)
             flash(f'{len(cleaned)} memories imported as private timeline entries. Review them before changing visibility.')
             return redirect(url_for('manage', mid=mid) + '#timeline')
         return render_template('import.html', mid=mid)
@@ -718,7 +778,7 @@ def create_app(config=None):
         if not db().execute('UPDATE events SET visibility=? WHERE id=? AND memorial_id=?', (visibility(), eid, mid)).rowcount:
             abort(404)
         audit(mid, 'event-visibility', eid)
-        db().commit()
+        commit_owned(mid)
         return redirect(url_for('manage', mid=mid) + '#timeline')
 
     @app.get('/privacy')
@@ -796,10 +856,10 @@ def create_app(config=None):
         fn = click.option('--reviewer', required=True, help='Opaque operator ID, not a personal name.')(fn)
         return click.option('--reference', required=True, help='Private case reference; only its digest is stored.')(fn)
 
-    def consent_operation(fn, *args, **kwargs):
+    def review_operation(fn, *args, **kwargs):
         try:
             return fn(db(), *args, **kwargs)
-        except consent.ConsentError as error:
+        except (consent.ConsentError, succession.SuccessionError) as error:
             raise click.ClickException(str(error)) from error
 
     @consent_commands.command('pending')
@@ -822,7 +882,7 @@ def create_app(config=None):
     @operator_options
     def verify_consent(grant_id, reviewer, reference):
         """Record completed authority/consent review. This is not automated verification."""
-        consent_operation(consent.verify_grant, grant_id, reviewer=reviewer, reference=reference)
+        review_operation(consent.verify_grant, grant_id, reviewer=reviewer, reference=reference)
         click.echo('Grant reviewed. Release time, audience and existing visibility still apply.')
 
     @consent_commands.command('confirm-death')
@@ -831,7 +891,7 @@ def create_app(config=None):
     @operator_options
     def confirm_consent_death(memorial_id, death_date, reviewer, reference):
         """Record independently reviewed evidence of passing for an opted-in memorial."""
-        consent_operation(consent.confirm_death, memorial_id, death_date=death_date, reviewer=reviewer, reference=reference)
+        review_operation(consent.confirm_death, memorial_id, death_date=death_date, reviewer=reviewer, reference=reference)
         click.echo('Confirmation recorded. Reviewed grants marked after passing may now allow sharing.')
 
     @consent_commands.command('clear-death')
@@ -839,7 +899,7 @@ def create_app(config=None):
     @operator_options
     def clear_consent_death(memorial_id, reviewer, reference):
         """Correct a mistaken confirmation; after-passing grants stop allowing access."""
-        consent_operation(consent.clear_death, memorial_id, reviewer=reviewer, reference=reference)
+        review_operation(consent.clear_death, memorial_id, reviewer=reviewer, reference=reference)
         click.echo('Confirmation cleared. After-passing grants are suspended.')
 
     @consent_commands.command('revoke')
@@ -848,7 +908,7 @@ def create_app(config=None):
     @operator_options
     def operator_revoke_consent(memorial_id, grant_id, reviewer, reference):
         """Revoke a grant after an operator review, for example an authority dispute."""
-        changed = consent_operation(consent.revoke_grant, memorial_id, grant_id, reviewer=reviewer, reference=reference)
+        changed = review_operation(consent.revoke_grant, memorial_id, grant_id, reviewer=reviewer, reference=reference)
         click.echo('Grant revoked; future visitor requests are blocked.' if changed else 'That grant was already revoked; check whether a replacement grant exists.')
 
     @consent_commands.command('audit')
@@ -858,7 +918,7 @@ def create_app(config=None):
         """Verify chains, optionally against an earlier off-host checkpoint. Never overwrites output."""
         try:
             prior = json.loads(checkpoint.read_text()) if checkpoint else None
-            heads = consent_operation(consent.verify_history, checkpoint=prior)
+            heads = review_operation(consent.verify_history, checkpoint=prior)
             content = json.dumps(heads, indent=2) + '\n'
             if output:
                 with os.fdopen(os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'w') as stream:
@@ -868,6 +928,37 @@ def create_app(config=None):
                 click.echo(content, nl=False)
         except (OSError, json.JSONDecodeError) as error:
             raise click.ClickException(str(error)) from error
+
+    @app.cli.group('succession')
+    def succession_commands():
+        """Review and transfer memorial care after verifying authority independently."""
+
+    @succession_commands.command('pending')
+    def pending_succession():
+        for row in db().execute("SELECT s.id,s.memorial_id,s.from_owner_id,s.nominee_id,s.accepted_at FROM succession_requests s "
+                                "JOIN memorials m ON m.id=s.memorial_id WHERE s.status='accepted' AND m.owner_id=s.from_owner_id ORDER BY s.accepted_at"):
+            click.echo(json.dumps(dict(row)))
+
+    @succession_commands.command('show')
+    @click.argument('request_id')
+    def show_succession(request_id):
+        """Read the bound accounts and declaration. Output includes personal information."""
+        row = db().execute('SELECT s.*,u.email AS nominee_email,o.email AS owner_email FROM succession_requests s '
+                           'JOIN users u ON u.id=s.nominee_id JOIN users o ON o.id=s.from_owner_id WHERE s.id=?', (request_id,)).fetchone()
+        if row is None:
+            raise click.ClickException('Nomination not found.')
+        click.echo(json.dumps(dict(row), indent=2))
+
+    @succession_commands.command('transfer')
+    @click.argument('request_id')
+    @click.option('--from-owner', 'from_owner_id', required=True, help='Current owner account ID from the reviewed nomination.')
+    @click.option('--to-account', 'to_account_id', required=True, help='Exact destination account ID from the reviewed nomination.')
+    @operator_options
+    def transfer_succession(request_id, from_owner_id, to_account_id, reviewer, reference):
+        """Complete an accepted nomination after reviewing authority for this transfer."""
+        changed = review_operation(succession.transfer, request_id, from_owner_id=from_owner_id, to_account_id=to_account_id,
+                                    reviewer=reviewer, reference=reference)
+        click.echo('Memorial care transferred. The URL, content and sharing controls were preserved.' if changed else 'This nomination was already completed; no ownership change was made.')
 
     return app
 

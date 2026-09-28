@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 
 ROOT = Path(__file__).resolve().parent
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def version(conn):
@@ -73,7 +73,7 @@ def upgrade(database_path, backup_path):
         current = version(conn)
         if current == SCHEMA_VERSION:
             return False
-        if current != 1:
+        if current not in range(1, SCHEMA_VERSION):
             raise ValueError(f'Unsupported source schema: {current}')
         fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
@@ -92,4 +92,4 @@ if __name__ == '__main__':
     parser.add_argument('--backup', required=True)
     args = parser.parse_args()
     changed = upgrade(args.database, args.backup)
-    print('Database upgraded to schema 2; verified pre-upgrade backup retained.' if changed else 'Database is already current.')
+    print(f'Database upgraded to schema {SCHEMA_VERSION}; verified pre-upgrade backup retained.' if changed else 'Database is already current.')

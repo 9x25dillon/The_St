@@ -1,0 +1,88 @@
+# Consent kernel stack for a single host (e.g. the Hetzner VPS that already
+# serves another app). Every port binds to 127.0.0.1: the existing reverse
+# proxy (Nginx/Caddy) routes a hostname to 127.0.0.1:8790 and terminates TLS.
+#
+#   cp deploy/stack.env.example deploy/stack.env   # fill in secrets
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/stack.env up -d --build
+name: remembrance-consent
+
+x-app: &app
+  build: {context: .., dockerfile: deploy/Dockerfile}
+  image: remembrance-consent:1.0.0
+  restart: unless-stopped
+  environment: &app-env
+    REMEMBRANCE_ENV: production
+    REMEMBRANCE_DATABASE_URL: postgresql+psycopg://remembrance_api:${REMEMBRANCE_API_PASSWORD}@postgres:5432/remembrance
+    REMEMBRANCE_TOKEN_SIGNING_KEY_PEM: ${REMEMBRANCE_TOKEN_SIGNING_KEY_PEM}
+    REMEMBRANCE_TOKEN_KEY_ID: ${REMEMBRANCE_TOKEN_KEY_ID}
+    REMEMBRANCE_AUTH_JWT_ALGORITHM: ${REMEMBRANCE_AUTH_JWT_ALGORITHM:-HS256}
+    REMEMBRANCE_AUTH_JWT_KEY: ${REMEMBRANCE_AUTH_JWT_KEY}
+    REMEMBRANCE_AUTH_JWT_ISSUER: ${REMEMBRANCE_AUTH_JWT_ISSUER:-remembrance-web}
+    REMEMBRANCE_AUTH_JWT_AUDIENCE: ${REMEMBRANCE_AUTH_JWT_AUDIENCE:-remembrance-consent}
+    REMEMBRANCE_RATE_LIMIT_BACKEND: redis
+    REMEMBRANCE_REDIS_URL: redis://redis:6379/1
+    REMEMBRANCE_CELERY_BROKER_URL: redis://redis:6379/0
+    REMEMBRANCE_STORAGE_BACKEND: local
+    REMEMBRANCE_STORAGE_LOCAL_ROOT: /var/lib/remembrance/objects
+    REMEMBRANCE_URL_SIGNING_SECRET: ${REMEMBRANCE_URL_SIGNING_SECRET}
+    REMEMBRANCE_PUBLIC_BASE_URL: ${REMEMBRANCE_PUBLIC_BASE_URL}
+  volumes:
+    - objects:/var/lib/remembrance/objects
+  depends_on:
+    migrate: {condition: service_completed_successfully}
+    redis: {condition: service_started}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      REMEMBRANCE_OWNER_PASSWORD: ${REMEMBRANCE_OWNER_PASSWORD}
+      REMEMBRANCE_API_PASSWORD: ${REMEMBRANCE_API_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-remembrance.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+
+  migrate:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    image: remembrance-consent:1.0.0
+    restart: "no"
+    environment:
+      REMEMBRANCE_MIGRATION_DATABASE_URL: postgresql+psycopg://remembrance_owner:${REMEMBRANCE_OWNER_PASSWORD}@postgres:5432/remembrance
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    ports:
+      - "127.0.0.1:8790:8790"
+
+  worker:
+    <<: *app
+    command: ["celery", "-A", "app.worker", "worker", "--loglevel=INFO", "--concurrency=2"]
+    healthcheck: {disable: true}
+
+  beat:
+    <<: *app
+    command: ["celery", "-A", "app.worker", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    healthcheck: {disable: true}
+
+volumes:
+  pgdata:
+  redisdata:
+  objects:

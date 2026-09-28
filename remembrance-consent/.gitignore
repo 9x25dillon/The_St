@@ -1,0 +1,10 @@
+.venv/
+var/
+.env
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+__pycache__/
+*.egg-info/
+deploy/stack.env

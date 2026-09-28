@@ -12,8 +12,11 @@ services:
       REMEMBRANCE_SECURE: "1"
       TRUST_PROXY: "1"
       MAX_MEDIA_BYTES: ${MAX_MEDIA_BYTES:-1073741824}
+      # Separate from /data so restoring a backup never replaces it. Copy it off-host after each erasure.
+      REMEMBRANCE_ERASURE_LEDGER: /erasure/ledger.jsonl
     volumes:
       - memories:/data
+      - erasure-ledger:/erasure
     read_only: true
     tmpfs:
       - /tmp:size=512m,mode=1777
@@ -30,3 +33,4 @@ services:
       start_period: 20s
 volumes:
   memories:
+  erasure-ledger:

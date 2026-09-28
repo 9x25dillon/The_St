@@ -286,7 +286,7 @@ class SuccessionMigrationTests(unittest.TestCase):
             self.assertTrue(database.upgrade(path, backup_path))
             with closing(sqlite3.connect(path)) as conn:
                 conn.row_factory = sqlite3.Row
-                self.assertEqual(database.version(conn), 3)
+                self.assertEqual(database.version(conn), database.SCHEMA_VERSION)
                 self.assertEqual(consent.verify_history(conn, checkpoint), checkpoint)
                 self.assertEqual(conn.execute('SELECT successor FROM memorials').fetchone()[0], 'legacy@example.com')
                 self.assertEqual(conn.execute('SELECT COUNT(*) FROM succession_requests').fetchone()[0], 0)

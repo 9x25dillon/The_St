@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 
 ROOT = Path(__file__).resolve().parent
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def version(conn):

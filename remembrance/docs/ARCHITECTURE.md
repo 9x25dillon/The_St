@@ -16,6 +16,7 @@ flowchart TB
     App --> Files[Protected media volume]
     App --> QR[H-level SVG / PNG QR generation]
     App --> Export[ZIP: JSON + media + offline HTML]
+    App --> Ledger[Erasure ledger outside the data volume]
     DB --> Backup[Encrypted off-site backup workflow]
     Files --> Backup
 ```
@@ -37,11 +38,12 @@ flowchart TB
 | Portability | Owner ZIP includes stored media, all timeline/tribute states, consent, family list, audit metadata, JSON schema version, offline HTML viewer |
 | Concerns | Privacy/copyright/authority reports persisted for owner and operator; operator CLI report queue; no automatic email delivery |
 | Legacy | Account-bound nominations, recipient acceptance/withdrawal, owner cancellation and operator-reviewed transfer; existing URLs and consent controls preserved |
+| Erasure | Owner request archives at once; operator-reviewed erasure of every memorial record and media file; off-database hash-chained ledger reapplied after restore |
 | Offline | Static install shell only; explicit owner ZIP for complete offline memories |
 
 ## Data and permissions
 
-`schema.sql` is the version-1 baseline; `migrations/002_consent.sql` adds reviewed sharing, and `migrations/003_succession.sql` adds succession requests. Fresh databases initialize at `PRAGMA user_version=3`. Existing version-1 or version-2 databases require the explicit, backup-first upgrade in [the consent workflow](CONSENT-WORKFLOW.md). Startup rejects unsupported versions. Future changes require numbered migrations and a verified pre-migration backup.
+`schema.sql` is the version-1 baseline; `migrations/002_consent.sql` adds reviewed sharing, `migrations/003_succession.sql` adds succession requests, and `migrations/004_erasure.sql` adds erasure requests and the erasure registry. Fresh databases initialize at `PRAGMA user_version=4`. Existing version-1 to version-3 databases require the explicit, backup-first upgrade in [the consent workflow](CONSENT-WORKFLOW.md). Startup rejects unsupported versions. Future changes require numbered migrations and a verified pre-migration backup.
 
 - `users`: identity, password hash, created time. No social OAuth tokens.
 - `memorials`: owner, story, consent, visibility, portrait reference, successor preference, archive state.
@@ -55,6 +57,8 @@ flowchart TB
 - `consent_controls`, `consent_grants`: opted-in release settings, operator confirmations, typed declarations and reviewed/revoked grants.
 - `consent_events`: append-only consent lifecycle and decision history, with per-memorial SHA-256 chaining and off-host checkpoint verification.
 - `succession_requests`: bound owner/nominee accounts, nomination-name snapshots, acceptance declarations, transfer review and prior authority provenance.
+- `erasure_requests`: owner requests with typed name and declaration; withdrawn or operator-declined status. Deleted with the memorial.
+- `erasures`: retained registry of erased memorial IDs, operator IDs, evidence digests and ledger positions; no content.
 - `rate_limits`: keyed network digest and rolling hour buckets, no raw IP analytics.
 
 | Resource | Public visitor | Granted family account | Owner |
@@ -67,7 +71,7 @@ flowchart TB
 | Private or archived media | Hidden | Hidden | Read/write |
 | Pending/archived tribute | Hidden | Hidden | Moderate |
 | Approved tribute | Read if profile readable | Read if profile readable | Moderate |
-| Family grants, consent, reports, ZIP | Hidden | Hidden | Read/manage |
+| Family grants, consent, reports, erasure requests, ZIP | Hidden | Hidden | Read/manage |
 
 Every media request resolves both profile and item permission. For opted-in memorials, visitor access also requires a reviewed consent grant whose release conditions and audience permit it. Owners retain management, preview and export access. Revocation blocks subsequent requests; an already-authorized response may finish. See [the consent workflow](CONSENT-WORKFLOW.md) for review, revocation and history verification. File paths are not exposed through a public static directory. Names never become filesystem paths. Family access does not confer editing or moderation power. The public owner page is a preview of everything the owner can see; labels distinguish nonpublic items. Use a signed-out browser for an exact visitor view.
 
@@ -87,7 +91,7 @@ Registration does not send a verification email. Family grants require account-c
 
 Memorial IDs are 64-bit random hex strings, immutable across profile edits, and not reused. The route resolves directly to the database ID. Permanent physical markers encode the owned domain, not a third-party QR service. Keeping the same domain and importing the server backup preserves existing QR codes. A future platform migration must retain `/m/<id>` or serve a stable redirect to the new viewer.
 
-Ordinary removal is archiving. Contributor withdrawal is permanent deletion of live tribute content; the action log retains an opaque ID. Full memorial/account erasure requires an operator-run maintenance procedure after rights verification; a dedicated erasure command is not included. Backups, previously exported owner archives, legal holds, and media featuring multiple people require a separate retention/erasure policy. Nothing here promises perpetual availability or prohibits lawful erasure.
+Ordinary removal is archiving. Contributor withdrawal is permanent deletion of live tribute content; the action log retains an opaque ID. Permanent memorial erasure follows the reviewed [erasure workflow](ERASURE-WORKFLOW.md): an owner request or verified claim, operator review, one transaction removing every memorial record and media file, and an off-database ledger reapplied after any restore. Account erasure still requires an operator-run maintenance procedure after rights verification. Backups, previously exported owner archives, legal holds, and media featuring multiple people require a separate retention/erasure policy. Nothing here promises perpetual availability or prohibits lawful erasure.
 
 The owner ZIP is a portable content package, not a full server restore: it omits account passwords and withdrawal secrets. The server backup format includes database plus media and can restore the service. These two formats intentionally serve different purposes.
 
@@ -109,4 +113,4 @@ This is a single-host pilot. SQLite WAL suits a modest number of concurrent fami
 
 At increased scale: migrate relational data to PostgreSQL using explicit migrations; move media to private S3-compatible storage and issue short-lived authorized delivery URLs; add asynchronous processing/quarantine and outbox-backed notifications; retain immutable memorial URLs. The permission checks and export format remain the contract. Public CDN caching would need invalidation for withdrawals and visibility changes.
 
-Not shipped: social OAuth/platform-specific import, billing/tiers, plaque checkout/fulfillment, native app-store packages, NFC programming UI, voice cloning, AI biography/moderation, user analytics, multilingual content, automatic succession, replicated storage, contracted permanence, or external escrow. These require separate engineering, credentials, policy decisions, and in some cases explicit recorded consent. They are not represented as active features in the app.
+Not shipped: social OAuth/platform-specific import, billing/tiers, plaque checkout/fulfillment, native app-store packages, NFC programming UI, voice cloning, AI biography/moderation, user analytics, multilingual content, automatic succession, self-service account deletion, replicated storage, contracted permanence, or external escrow. These require separate engineering, credentials, policy decisions, and in some cases explicit recorded consent. They are not represented as active features in the app.

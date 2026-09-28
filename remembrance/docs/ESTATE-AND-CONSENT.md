@@ -100,10 +100,10 @@ Suggested operational targets (not claims about statutory deadlines): acknowledg
 
 - Ordinary family edits: archive and restore.
 - Contributor withdrawal code: delete text/name from the live database; preserve only a noncontent action event.
-- Account or memorial erasure: verify authority, consider legal hold and co-subject rights, remove live records and media using maintenance tooling, restrict/expire backup copies according to published policy.
+- Memorial erasure: verify authority, consider legal hold and co-subject rights, then use the reviewed [erasure workflow](ERASURE-WORKFLOW.md), which removes live records and media files and records the decision in an off-database ledger. Account erasure still requires maintenance tooling. Restrict/expire backup copies according to published policy.
 - Partial-media concern: owner can archive immediately; operator reviews redaction or permanent removal.
 - Copyright: handle valid notices and counter-notices using counsel-approved procedure, not a generic automatic deletion rule.
-- Restore after an incident: reapply the separate erasure ledger before reopening service so a backup does not resurrect erased data.
+- Restore after an incident: run `flask --app app erasure reapply` with the current off-host ledger before reopening service so a backup does not resurrect erased memorials.
 
 The audit log is not exempt from privacy law. Do not copy erased content into it. Exported archives, screenshots, or material already published elsewhere cannot be recalled by this server.
 

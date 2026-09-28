@@ -30,7 +30,8 @@ def restore(archive, target):
         for (name,) in db.execute('SELECT filename FROM media'):
             if Path(name).name != name or not (target / 'media' / name).is_file():
                 raise ValueError('Missing or invalid media in backup')
-    print(f'Restored to {target}. Set ownership and a new SECRET_KEY; validate before routing traffic.')
+    print(f'Restored to {target}. Reapply the erasure ledger (flask --app app erasure reapply), set ownership and '
+          'a new SECRET_KEY; validate before routing traffic.')
 
 
 if __name__ == '__main__':

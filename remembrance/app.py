@@ -26,10 +26,11 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import BadRequest, SecurityError
 
 if __package__:
-    from . import consent, database, succession
+    from . import consent, database, erasure, succession
 else:
     import consent
     import database
+    import erasure
     import succession
 
 ROOT = Path(__file__).resolve().parent
@@ -195,7 +196,12 @@ def create_app(config=None):
             return True
         return consent.authorize(db(), mid, role=role, actor_id=g.user['id'] if g.user else None).allowed
 
+    def pending_erasure(mid):
+        return db().execute("SELECT * FROM erasure_requests WHERE memorial_id=? AND status='pending'", (mid,)).fetchone()
+
     def sharing_label(m):
+        if pending_erasure(m['id']):
+            return 'Erasure requested'
         if m['archived']:
             return 'Archived'
         if m['visibility'] == 'private':
@@ -359,7 +365,7 @@ def create_app(config=None):
         return render_template('manage.html', m=m, media=rows('media'), events=rows('events'),
                                tributes=rows('tributes'), members=rows('members'),
                                audit=db().execute('SELECT * FROM audit WHERE memorial_id=? ORDER BY id DESC LIMIT 30', (mid,)).fetchall(),
-                               reports=rows('reports'), sharing_label=sharing_label(m),
+                               reports=rows('reports'), sharing_label=sharing_label(m), erasure_request=pending_erasure(mid),
                                sharing_control=db().execute('SELECT * FROM consent_controls WHERE memorial_id=?', (mid,)).fetchone())
 
     @app.route('/m/<mid>/consent', methods=['GET', 'POST'])
@@ -391,6 +397,7 @@ def create_app(config=None):
               if changed else 'That grant was already revoked. Check the current sharing status below.')
         return redirect(url_for('consent_page', mid=mid))
 
+    @app.errorhandler(erasure.ErasureError)
     @app.errorhandler(succession.SuccessionError)
     @app.errorhandler(consent.ConsentError)
     def consent_error(error):
@@ -436,6 +443,28 @@ def create_app(config=None):
             flash('Acceptance recorded. The operator must review authority before transferring care.' if action == 'accept' else 'Nomination declined. No transfer can proceed from it.')
             return redirect(url_for('succession_invitation', request_id=request_id))
         return render_template('succession_invitation.html', invitation=invitation, declaration=succession.DECLARATION_TEXT)
+
+    @app.route('/m/<mid>/erasure', methods=['GET', 'POST'])
+    @login_required
+    def erasure_page(mid):
+        m = owned_action(mid)
+        if request.method == 'POST':
+            rate_limit('erasure-request', 10)
+            if request.form.get('consent') != 'yes':
+                abort(400, 'Confirm the erasure declaration before recording a request.')
+            erasure.request(db(), mid, g.user['id'], signed_name=field('signed_name', 120, True))
+            flash('Erasure requested. The memorial is archived and hidden from visitors while the operator reviews your request.')
+            return redirect(url_for('erasure_page', mid=mid))
+        return render_template('erasure.html', m=m, pending=pending_erasure(mid), declaration=erasure.DECLARATION_TEXT,
+                               requests=db().execute('SELECT * FROM erasure_requests WHERE memorial_id=? ORDER BY created_at DESC', (mid,)).fetchall())
+
+    @app.post('/m/<mid>/erasure/<request_id>/withdraw')
+    @login_required
+    def withdraw_erasure(mid, request_id):
+        owned_action(mid)
+        changed = erasure.withdraw(db(), mid, request_id, g.user['id'])
+        flash('Erasure request withdrawn. The memorial stays archived until you restore it.' if changed else 'That request is already closed.')
+        return redirect(url_for('erasure_page', mid=mid))
 
     @app.post('/m/<mid>/upload')
     @login_required
@@ -503,9 +532,11 @@ def create_app(config=None):
         if not item:
             abort(404)
         _, role = get_memorial(item['memorial_id'])
-        if not visible(item, role):
+        path = data / 'media' / item['filename']
+        # A file can vanish while an erasure is being committed.
+        if not visible(item, role) or not path.is_file():
             abort(404)
-        return send_file(data / 'media' / item['filename'], mimetype=item['mime'], conditional=True)
+        return send_file(path, mimetype=item['mime'], conditional=True)
 
     @app.post('/m/<mid>/media/<fid>')
     @login_required
@@ -646,6 +677,10 @@ def create_app(config=None):
             abort(400, 'Use the succession page to nominate a confirmed account.')
         elif action in ('archive', 'restore'):
             db().execute('UPDATE memorials SET archived=? WHERE id=?', (int(action == 'archive'), mid))
+            # Rechecked under the write lock: a pending erasure request keeps the memorial archived.
+            if action == 'restore' and pending_erasure(mid):
+                db().rollback()
+                abort(400, 'Withdraw the pending erasure request before restoring this memorial.')
         else:
             abort(400)
         audit(mid, 'memorial-' + action)
@@ -722,8 +757,11 @@ def create_app(config=None):
         nominations = [dict(x) for x in db().execute('SELECT * FROM succession_requests WHERE memorial_id=? ORDER BY created_at', (mid,))]
         if nominations:
             payload['succession'] = nominations
-            if not control:
-                payload['consent_history'] = [dict(x) for x in db().execute('SELECT * FROM consent_events WHERE memorial_id=? ORDER BY sequence', (mid,))]
+        erasure_requests = [dict(x) for x in db().execute('SELECT * FROM erasure_requests WHERE memorial_id=? ORDER BY created_at', (mid,))]
+        if erasure_requests:
+            payload['erasure_requests'] = erasure_requests
+        if not control and (nominations or erasure_requests):
+            payload['consent_history'] = [dict(x) for x in db().execute('SELECT * FROM consent_events WHERE memorial_id=? ORDER BY sequence', (mid,))]
         out = tempfile.TemporaryFile()
         with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
             z.writestr('memorial.json', json.dumps(payload, indent=2, ensure_ascii=False))
@@ -816,6 +854,9 @@ def create_app(config=None):
         if db().execute('SELECT 1 FROM memorials WHERE id=?', (mid,)).fetchone():
             click.echo('Example already exists.')
             return
+        if db().execute('SELECT 1 FROM erasures WHERE memorial_id=?', (mid,)).fetchone():
+            click.echo('The example was erased on this server; it will not be recreated.')
+            return
         db().execute('INSERT INTO users VALUES(?,?,?,?,?)', (uid, 'example@invalid.example', 'Example family', generate_password_hash(secrets.token_urlsafe(64)), now()))
         db().execute('INSERT INTO memorials(id,owner_id,name,born,died,tagline,biography,location,visibility,authority,authority_name,consent_at,created,updated,demo) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)',
                      (mid, uid, 'Eleanor Rose Bennett', '1942-04-18', '2024-09-06', 'A life rooted in love. A spirit that helped others bloom.',
@@ -859,7 +900,7 @@ def create_app(config=None):
     def review_operation(fn, *args, **kwargs):
         try:
             return fn(db(), *args, **kwargs)
-        except (consent.ConsentError, succession.SuccessionError) as error:
+        except (consent.ConsentError, succession.SuccessionError, erasure.ErasureError, OSError) as error:
             raise click.ClickException(str(error)) from error
 
     @consent_commands.command('pending')
@@ -959,6 +1000,78 @@ def create_app(config=None):
         changed = review_operation(succession.transfer, request_id, from_owner_id=from_owner_id, to_account_id=to_account_id,
                                     reviewer=reviewer, reference=reference)
         click.echo('Memorial care transferred. The URL, content and sharing controls were preserved.' if changed else 'This nomination was already completed; no ownership change was made.')
+
+    @app.cli.group('erasure')
+    def erasure_commands():
+        """Permanent memorial erasure after reviewing authority, legal holds and other people's rights."""
+
+    ledger_option = click.option('--ledger', required=True, envvar='REMEMBRANCE_ERASURE_LEDGER',
+                                 type=click.Path(dir_okay=False, path_type=Path),
+                                 help='Erasure ledger outside the data directory. Keep a current off-host copy.')
+
+    @erasure_commands.command('init-ledger')
+    @ledger_option
+    def init_erasure_ledger(ledger):
+        """Create an empty ledger when first deploying, so reapply --check can monitor it. Never overwrites."""
+        review_operation(erasure.create_ledger, ledger, data)
+        click.echo(f'Empty erasure ledger created at {ledger}.')
+
+    @erasure_commands.command('pending')
+    def pending_erasures():
+        """List requests awaiting review; outputs account IDs, not names."""
+        for row in db().execute('SELECT r.id,r.memorial_id,r.requested_by,r.created_at,m.owner_id,m.archived FROM erasure_requests r '
+                                "JOIN memorials m ON m.id=r.memorial_id WHERE r.status='pending' ORDER BY r.created_at"):
+            click.echo(json.dumps(dict(row)))
+
+    @erasure_commands.command('show')
+    @click.argument('request_id')
+    def show_erasure(request_id):
+        """Read a request's typed name and declaration. Output includes personal information."""
+        row = db().execute('SELECT * FROM erasure_requests WHERE id=?', (request_id,)).fetchone()
+        if row is None:
+            raise click.ClickException('Erasure request not found.')
+        click.echo(json.dumps(dict(row), indent=2))
+
+    @erasure_commands.command('preview')
+    @click.argument('memorial_id')
+    def preview_erasure(memorial_id):
+        """Count what erasure would remove. Changes nothing and prints no content."""
+        click.echo(json.dumps(review_operation(erasure.preview, memorial_id, data / 'media'), indent=2))
+
+    @erasure_commands.command('memorial')
+    @click.argument('memorial_id')
+    @click.option('--owner', 'owner_id', required=True, help='Current owner account ID from the reviewed case.')
+    @ledger_option
+    @operator_options
+    def erase_memorial(memorial_id, owner_id, ledger, reviewer, reference):
+        """Permanently erase a memorial's content, media files and access records. Cannot be undone."""
+        changed = review_operation(erasure.erase, memorial_id, owner_id=owner_id, reviewer=reviewer, reference=reference,
+                                   ledger_path=ledger, data_dir=data)
+        click.echo('Memorial erased. Copy the updated ledger off this host.' if changed else 'This memorial was already erased; nothing changed.')
+
+    @erasure_commands.command('decline')
+    @click.argument('request_id')
+    @operator_options
+    def decline_erasure(request_id, reviewer, reference):
+        """Close a pending request without erasing, for example during a dispute or legal hold."""
+        changed = review_operation(erasure.decline, request_id, reviewer=reviewer, reference=reference)
+        click.echo('Request declined. The memorial stays archived until its owner restores it.' if changed else 'That request was already declined.')
+
+    @erasure_commands.command('reapply')
+    @ledger_option
+    @click.option('--check', is_flag=True, help='Report outstanding erasures without changing anything; exit 1 if any.')
+    def reapply_erasures(ledger, check):
+        """After any restore, erase again what the backup brought back. Run before routing traffic."""
+        summary = review_operation(erasure.reapply, ledger, data, check=check)
+        click.echo(json.dumps(summary))
+        if check and summary['outstanding']:
+            raise click.ClickException(f'{len(summary["outstanding"])} ledger erasure(s) are not applied to this database.')
+
+    @erasure_commands.command('list')
+    def list_erasures():
+        """Erased memorial IDs with review digests. No content remains to show."""
+        for row in erasure.registry(db()):
+            click.echo(json.dumps(row))
 
     return app
 

@@ -34,7 +34,7 @@ Use trusted server access. In Compose, replace `.venv/bin/python` below with `do
 .venv/bin/python -m flask --app app succession transfer NOMINATION_ID --from-owner SOURCE_ACCOUNT_ID --to-account DESTINATION_ACCOUNT_ID --reviewer reviewer-1 --reference CASE_ID
 ```
 
-`pending` lists accepted nominations whose source owner is still current. `show` includes personal information and the acceptance declaration. `transfer` requires all three identifiers to match the reviewed nomination and refuses offered, declined, cancelled or stale nominations. Repeating a completed transfer is a no-op, even if ownership later changes again.
+`pending` lists accepted nominations whose source owner is still current. `show` includes personal information and the acceptance declaration. `transfer` requires all three identifiers to match the reviewed nomination and refuses offered, declined, cancelled or stale nominations. Repeating a completed transfer is a no-op, even if ownership later changes again. A pending erasure request blocks the transfer until the owner withdraws it or the operator declines it.
 
 `--reviewer` is an opaque operator ID. Only the digest of `--reference` is stored; keep supporting evidence in the operator's restricted case system. No command sends an email or message.
 
@@ -50,12 +50,12 @@ Owner mutation routes recheck ownership immediately before commit while their wr
 
 Use `flask --app app consent audit` and trusted off-host checkpoints to verify the shared consent/succession history. Owner exports include the succession records and chained events. Full server backups include the new tables and preserve completed transfers on restore.
 
-## Schema 3 upgrade
+## Schema upgrade
 
-Fresh databases initialize at version 3. Existing schema 1 or 2 requires an explicit upgrade. Stop all application writers, take a complete database-and-media backup, then run:
+Fresh databases initialize at version 4, which also adds [reviewed erasure](ERASURE-WORKFLOW.md). Existing schema 1, 2 or 3 requires an explicit upgrade. Stop all application writers, take a complete database-and-media backup, then run:
 
 ```sh
-.venv/bin/python database.py /path/to/data/remembrance.sqlite3 --backup /path/to/backups/before-schema-3.sqlite3
+.venv/bin/python database.py /path/to/data/remembrance.sqlite3 --backup /path/to/backups/before-schema-4.sqlite3
 ```
 
 The upgrader creates and verifies a new SQLite backup before applying all pending numbered migrations in one transaction. It does not overwrite a backup file. Version-2 consent rows and their hash chains remain unchanged. Restart only after the upgrade succeeds. For Compose, follow the build/run sequence in [the consent upgrade guide](CONSENT-WORKFLOW.md#upgrade-an-existing-installation).

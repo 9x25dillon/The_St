@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}Permanent erasure — {{ m.name }} — Remembrance{% endblock %}
+{% block content %}
+<section class="reading section consent-page">
+  <a class="back-link" href="{{ url_for('manage', mid=m.id) }}">← Back to memorial care</a>
+  <p class="eyebrow">LETTING GO, WITH CARE</p>
+  <h1>Permanent erasure.</h1>
+  <p class="lead">Ask the operator to permanently erase {{ m.name }}’s memorial and everything stored with it on this server.</p>
+  {% if pending %}
+  <section class="panel consent-status" aria-labelledby="erasure-status">
+    <p class="eyebrow">YOUR REQUEST</p>
+    <h2 id="erasure-status">Waiting for operator review.</h2>
+    <p>The memorial is archived and hidden from visitors. You can still care for it and download its archive until the operator completes the erasure.</p>
+    <p class="fineprint">Share this request reference when arranging review:</p>
+    <p><code>{{ pending.id }}</code></p>
+    {% if support_email %}<p><a href="mailto:{{ support_email }}">Contact the operator</a></p>{% endif %}
+    <details><summary>Your recorded declaration</summary><p>{{ pending.declaration_text }}</p><p>Recorded as {{ pending.signed_name }}.</p></details>
+    <a class="button secondary" href="{{ url_for('export', mid=m.id) }}">Download full archive ↓</a>
+    <hr>
+    <h3>Changed your mind?</h3>
+    <p>Withdrawing closes this request. The memorial stays archived until you restore it from memorial care.</p>
+    <form method="post" action="{{ url_for('withdraw_erasure', mid=m.id, request_id=pending.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="button secondary">Withdraw erasure request</button>
+    </form>
+  </section>
+  {% else %}
+  <section class="panel" aria-labelledby="request-erasure">
+    <p class="eyebrow">BEFORE YOU DECIDE</p>
+    <h2 id="request-erasure">Keep a copy first.</h2>
+    <p>Erasure cannot be undone. Download the full archive if you or your family may want these memories later.</p>
+    <a class="button secondary" href="{{ url_for('export', mid=m.id) }}">Download full archive ↓</a>
+    <p class="fineprint">To hide the memorial without erasing it, archive it from memorial care instead. You can restore an archive at any time.</p>
+    <hr>
+    <form method="post" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Your full name<input name="signed_name" maxlength="120" autocomplete="name" required></label>
+      <p class="fineprint">{{ declaration }}</p>
+      <label class="check"><input type="checkbox" name="consent" value="yes" required><span>I agree to this declaration and have authority to request erasure of this memorial. I have considered other people’s wishes and any dispute or legal hold I know of.</span></label>
+      <button class="button">Request erasure and archive now</button>
+    </form>
+  </section>
+  {% endif %}
+  <section class="panel">
+    <p class="eyebrow">WHAT ERASURE MEANS</p>
+    <h2>What is removed, and what remains.</h2>
+    <p>After review, the operator erases the life story, every stored photo, film and recording file, the timeline, tributes, candles, family access, reports, sharing grants, nominations and activity record. The memorial’s address and QR code stop working permanently.</p>
+    <p>A tamper-evident history remains: opaque account and record identifiers, times, fixed event codes and digests, but no names, stories or media. The operator also keeps a separate erasure record so that restoring an older backup cannot bring the memorial back.</p>
+    <p class="fineprint">Archives already downloaded, copies others saved, and content published elsewhere cannot be recalled. Server backups expire on the operator’s published retention schedule.</p>
+  </section>
+  {% if requests %}
+  <section class="panel">
+    <p class="eyebrow">A RECORD OF YOUR REQUESTS</p>
+    <h2>Request history.</h2>
+    <div class="item-list">{% for item in requests %}<article><span class="badge">{{ item.status }}</span><p>{{ item.created_at[:16].replace('T', ' ') }} UTC{% if item.closed_at %} · closed {{ item.closed_at[:16].replace('T', ' ') }} UTC{% endif %}</p><small>Request {{ item.id }}</small></article>{% endfor %}</div>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

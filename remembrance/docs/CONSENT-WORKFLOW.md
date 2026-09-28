@@ -16,7 +16,7 @@ The concern-report form and contributor withdrawal remain available when sharing
 
 ## Upgrade an existing installation
 
-Fresh, empty databases initialize at schema 3, including the succession tables. Existing schema-1 or schema-2 databases require an explicit upgrade; the app refuses startup instead of silently changing them. Do not run an older release against a newer schema: older code does not enforce this gate.
+Fresh, empty databases initialize at schema 4, including the succession and erasure tables. Existing schema-1 to schema-3 databases require an explicit upgrade; the app refuses startup instead of silently changing them. Do not run an older release against a newer schema: older code does not enforce this gate.
 
 Stop all application writers and preserve a complete database-and-media backup using `scripts/backup.py`. The migration makes an additional verified SQLite backup before adding the consent tables and triggers. Choose a new backup filename; existing files are never overwritten.
 
@@ -28,7 +28,7 @@ For the Compose deployment, after stopping the old app and taking the complete b
 
 ```sh
 docker compose build app
-docker compose run --rm --no-deps app python database.py /data/remembrance.sqlite3 --backup /data/before-schema-3.sqlite3
+docker compose run --rm --no-deps app python database.py /data/remembrance.sqlite3 --backup /data/before-schema-4.sqlite3
 docker compose up -d app
 ```
 
@@ -79,7 +79,7 @@ Verification scans the full history. An earlier trusted checkpoint verifies the 
 
 Owner ZIP exports include the consent settings, grants and full consent history as an additive `consent` member in `memorial.json`. Server backups already include all SQLite tables. Preserve the database and media together during backup and restore.
 
-Reviewed succession is documented in [the succession workflow](SUCCESSION-WORKFLOW.md). It preserves existing sharing grants and also records its lifecycle in the consent history.
+Reviewed succession is documented in [the succession workflow](SUCCESSION-WORKFLOW.md). It preserves existing sharing grants and also records its lifecycle in the consent history. [Reviewed erasure](ERASURE-WORKFLOW.md) removes a memorial's grants with its content and ends its chain with a `memorial_erased` event; it never rewrites the history.
 
 ## Scope and capacity
 

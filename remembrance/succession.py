@@ -101,6 +101,8 @@ def transfer(conn, request_id, *, from_owner_id, to_account_id, reviewer, refere
         if invitation['status'] != 'accepted':
             raise SuccessionError('Only an accepted, current nomination can be transferred.')
         memorial = owner_record(conn, invitation['memorial_id'], from_owner_id)
+        if conn.execute("SELECT 1 FROM erasure_requests WHERE memorial_id=? AND status='pending'", (memorial['id'],)).fetchone():
+            raise SuccessionError('Resolve the pending erasure request before transferring care.')
         if not invitation['accepted_name'] or invitation['accepted_authority'] not in ('executor', 'family-authorized') or invitation['declaration_text'] != DECLARATION_TEXT:
             raise SuccessionError('The nominee must record a valid acceptance declaration before transfer.')
         timestamp = consent.now()

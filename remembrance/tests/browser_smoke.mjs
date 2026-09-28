@@ -148,6 +148,26 @@ try{
   await signIn('browser@example.com');
   assert.equal(await evaluate(`fetch(${JSON.stringify(base+'/manage')}).then(r=>r.status)`),403,'Former owner must lose management access');
   assert.equal(await evaluate(`fetch(${JSON.stringify(base+'/export')}).then(r=>r.status)`),403,'Former owner must lose export access');
+  await go('/memorials/new');
+  await fill({name:'Memorial To Erase',biography:'A story that will be erased.',authority:'executor',authority_name:'Browser Tester',consent:true,visibility:'public'});
+  await evaluate('document.querySelector(".form-stack").requestSubmit()');
+  await until("location.pathname.endsWith('/manage') && document.body.innerText.includes('Request permanent erasure')");
+  const erasedBase=await evaluate("location.pathname.replace('/manage','')");
+  const statusOf=(path,credentials='omit')=>evaluate(`fetch(${JSON.stringify(path)},{credentials:${JSON.stringify(credentials)}}).then(r=>r.status)`);
+  assert.equal(await statusOf(erasedBase),200);
+  await go(erasedBase+'/erasure');
+  assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Erasure request must fit mobile');
+  await fill({signed_name:'Browser Tester',consent:true});
+  await evaluate('document.querySelector(".form-stack").requestSubmit()');
+  await until("document.body.innerText.includes('Waiting for operator review.')");
+  assert.equal(await statusOf(erasedBase),404,'Requesting erasure must hide the memorial from visitors');
+  assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Pending erasure view must fit mobile');
+  await screenshot('erasure-mobile.png');
+  execFileSync(python,['-m','flask','--app','app','erasure','memorial',erasedBase.split('/')[2],'--owner',originalOwnerId,
+    '--ledger',join(tmp,'erasure-ledger.jsonl'),'--reviewer','browser-test','--reference','disposable-erasure-case'],{cwd:root,env});
+  await go('/dashboard');
+  assert.equal(await evaluate("document.body.innerText.includes('Memorial To Erase')"),false,'Erased memorial must leave the dashboard');
+  assert.equal(await statusOf(erasedBase,'same-origin'),404,'Erased memorial must be gone for its former owner');
   await go('/install');
   await until("!!navigator.serviceWorker.controller");
   const cacheKeys=await evaluate("(async()=>{const paths=[];for(const key of await caches.keys()){const cache=await caches.open(key);for(const req of await cache.keys())paths.push(new URL(req.url).pathname);}return paths;})()");
@@ -159,7 +179,7 @@ try{
   await call('Page.navigate',{url:env.PUBLIC_URL+'/dashboard'});
   await until("document.body.innerText.includes('A quiet pause.')");
   assert.deepEqual(errors,[],'No browser script errors');
-  console.log('PASS: desktop/mobile layouts, memorial flows, consent review/revocation, successor nomination/acceptance, reviewed transfer, former-owner access removal, preserved consent, and offline privacy. Screenshots in remembrance/dist/.');
+  console.log('PASS: desktop/mobile layouts, memorial flows, consent review/revocation, successor nomination/acceptance, reviewed transfer, former-owner access removal, preserved consent, erasure request and reviewed erasure, and offline privacy. Screenshots in remembrance/dist/.');
 }catch(error){
   console.error(error);
   throw error;

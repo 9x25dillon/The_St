@@ -33,6 +33,7 @@ from app.successors.router import router as successors_router
 log = logging.getLogger(__name__)
 
 UNAUTHENTICATED_PREFIXES = ("/healthz", "/export/download", "/.well-known/")
+DEVELOPMENT_DOC_PREFIXES = ("/docs", "/openapi.json")
 RATE_LIMITED_PATHS = ("/consent/authorize",)
 
 
@@ -92,5 +93,6 @@ def create_app(services: Services | None = None) -> FastAPI:
     # add_middleware wraps: the last one added is the outermost.
     app.add_middleware(PurposeGuardMiddleware, services_getter=lambda: app.state.services)
     app.add_middleware(RateLimitMiddleware, limiter=services.rate_limiter, paths=RATE_LIMITED_PATHS)
-    app.add_middleware(AuthMiddleware, authenticator=services.authenticator, exempt_prefixes=UNAUTHENTICATED_PREFIXES)
+    exempt = UNAUTHENTICATED_PREFIXES + (() if production else DEVELOPMENT_DOC_PREFIXES)
+    app.add_middleware(AuthMiddleware, authenticator=services.authenticator, exempt_prefixes=exempt)
     return app

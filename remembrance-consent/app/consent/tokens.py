@@ -46,15 +46,20 @@ CONSENT_TOKEN_HEADER = "X-Consent-Authorization"
 REQUIRED_CLAIMS = ("iss", "aud", "sub", "jti", "iat", "nbf", "exp", "act", "pid", "pur")
 
 
+def _pem_bytes(pem: str) -> bytes:
+    # .env files and container env vars often carry PEMs with escaped newlines.
+    return pem.strip().replace("\\n", "\n").encode()
+
+
 def _load_private(pem: str) -> Ed25519PrivateKey:
-    key = serialization.load_pem_private_key(pem.encode(), password=None)
+    key = serialization.load_pem_private_key(_pem_bytes(pem), password=None)
     if not isinstance(key, Ed25519PrivateKey):
         raise ValueError("token signing key must be an Ed25519 private key")
     return key
 
 
 def _load_public(pem: str) -> Ed25519PublicKey:
-    key = serialization.load_pem_public_key(pem.encode())
+    key = serialization.load_pem_public_key(_pem_bytes(pem))
     if not isinstance(key, Ed25519PublicKey):
         raise ValueError("token verification keys must be Ed25519 public keys")
     return key

@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 tiktok_mirror.html
 android/build/
+
+# Secrets: this repo is public. Never commit env files; templates stay tracked.
+.env
+.env.*
+*.env
+!.env.example
